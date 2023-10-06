@@ -1,0 +1,44 @@
+body {
+  font-family: 'San Francisco', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  background-color: #f3f3f3;
+}
+
+.navbar {
+  background-color: #1d1d1d;
+  border: none;
+}
+
+.navbar a {
+  color: white;
+}
+
+.navbar .nav > li > a:hover {
+  background-color: #2c2c2c;
+}
+
+.navbar .nav > li.active > a,
+.navbar .nav > li.active > a:hover {
+  background-color: #1d1d1d;
+}
+
+.outer {
+  background-color: white;
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.sidebar-panel {
+  background-color: #f3f3f3;
+}
+
+.sidebar-panel h4 {
+  color: #3f3f3f;
+}
+
+.main-panel {
+  background-color: #f3f3f3;
+}
+
+.tab-panel {
+  padding: 20px;
+}
