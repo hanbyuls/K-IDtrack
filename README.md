@@ -19,7 +19,6 @@ Key elements of the analysis code are as follows:
 
 ## Research Team
 
-Research Team
 Taesung Park, PhD
 Project PI,
 Professor, Department of Statistics,
