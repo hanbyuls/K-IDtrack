@@ -26,7 +26,7 @@ Seoul National University,
 Gwanak_1 Gwanak-ro, Gwanak-gu
 Seoul, Korea 08826
 
-Hanbyul Song, Gyulhee Han, Catherine Apio, Jiwon Park, Zhe Liu, and Hu Xuwen
+Hanbyul Song, Gyulhee Han, Catherine Apio, Jiwon Park and Zhe Liu
 Graduate Student, Seoul National University, Seoul, Korea 08826
 
 
@@ -38,4 +38,5 @@ Dr. Ashok Krishnamurthy
 ## Contact
 
 taesungp@gmail.com
+
 http://bibs.snu.ac.kr/
