@@ -37,6 +37,8 @@ Dr. Ashok Krishnamurthy
 
 ## Contact
 
-taesungp@gmail.com
+tspark@stats.snu.ac.kr
+
+byul1891@gmail.com
 
 http://bibs.snu.ac.kr/
