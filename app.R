@@ -45,8 +45,6 @@ shhh(library(zoo))
 shhh((library(lubridate)))
 shhh((library(rsconnect)))
 
-# rsconnect::setAccountInfo(name='covidtrack', token='B3B8FD441A72C9B327FBBBBDF8012B7C', secret='pUawtlS+Rpdh5qCeUwke0xfSWCJCyR0qNFzem0/n')
-# rsconnect::deployApp('C:/Users/ron18/Desktop/2022-1/bibs/covid19/kcovidtrack')
 
 ############### Load data ###############
 # setwd("C:/Users/ron18/Desktop/2022-1/bibs/covid19/kcovidtrack")
