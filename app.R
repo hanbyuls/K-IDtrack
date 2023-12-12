@@ -39,7 +39,6 @@ shhh(library(htmltools))
 shhh(library(shinyBS))
 shhh(library(plotly))
 shhh(library(shinydashboard))
-shhh(library(shinybusy))
 shhh(library(DT))
 shhh(library(zoo))
 shhh((library(lubridate)))
@@ -47,27 +46,19 @@ shhh((library(rsconnect)))
 
 
 ############### Load data ###############
-# setwd("C:/Users/ron18/Desktop/2022-1/bibs/covid19/kcovidtrack")
 
-# Read data from CSV file
-# data <- read.csv("Korea viz/data/covid_data.csv")
-data_korea <- read.csv("Korea viz/data/data_korea.csv")
+# setwd("C:/Users/ron18/Desktop/2022-1/bibs/covid19/kcovidtrack")
+# data_korea <- read.csv("Korea viz/data/data_korea.csv")
 region_population <- read_excel("Korea viz/data/region_population.xlsx")
 population <- read_excel("misc/population.xlsx", 1) #?
-epiparms <- read_excel("misc/epiparms.xlsx", 1) #?
-# region_df <- read.csv("Korea viz/data/region_data.csv")
-full_region_df <- read.csv("Korea viz/data/region_data_05_31.csv")
-
+full_region_df <- read.csv("Korea viz/data/region_data_08_31.csv")
 
 # Read data for map
-worldcountry = geojsonio::geojson_read("Korea viz/data/input_data/50m.geojson", what = "sp")
-# cv_cases = read.csv("Korea viz/data/input_data/coronavirus.csv")
-# countries = read.csv("Korea viz/data/input_data//countries_codes_and_coordinates.csv")
+# worldcountry = geojsonio::geojson_read("Korea viz/data/input_data/50m.geojson", what = "sp")
 south_korea <- sf::st_read("Korea viz/data/south-korea-with-regions_1516.geojson") #region lon,lat
 region_match <- read.csv("Korea viz/data/region_match.csv") # english/korean name
 
 # setwd("C:/Users/ron18/Desktop/2022-1/bibs/covid19/kcovidtrack/")
-
 
 ############ data processing ###############
 
@@ -79,7 +70,6 @@ region_population <- region_population[,1:2]
 region_population$region <- region_match$eng[match(region_population$region, region_match$kor)]
 
 # Remove total and lazaretto in region_df
-# region_df <- subset(region_df, !(region %in% c("Total", "Lazaretto")))
 full_region_df <- subset(full_region_df, !(region %in% c("Total", "Lazaretto")))
 
 # Find indices of zero values in cum_deaths
@@ -89,117 +79,126 @@ zero_indices_cum_cases <- which(full_region_df$cum_cases == 0)
 # Find indices of zero values in daily_cases
 zero_indices_daily_case <- which(full_region_df$daily_cases == 0)
 
-# Get the index of the start time point from where you want to interpolate (cum_deaths)
-start_time_point <- 10000
-# GET the same for cum_cases
-start_time_point_cum_cases <- 10000
-# GET the same for daily_cases
-start_time_point_daily_cases <- 10000
 
-# Filter out zero_indices that are greater than or equal to start_time_point
-zero_indices_to_interpolate <- zero_indices[zero_indices >= start_time_point]
-zero_indices_to_interpolate_daily_cases <- zero_indices_daily_case[zero_indices_daily_case >= start_time_point_daily_cases]
-zero_indices_to_interpolate_cum_cases <- zero_indices_cum_cases[zero_indices_cum_cases >= start_time_point_cum_cases]
+# Keep the row with the highest 'cum_cases' for each region and date
+full_region_df <- full_region_df %>%
+  group_by(region, date) %>%
+  # Assuming 'cum_cases' can serve as a proxy for the latest data
+  slice(which.max(cum_cases)) %>%
+  ungroup()
+
+full_region_df <- full_region_df %>%
+  arrange(region, date) %>%
+  group_by(region) %>%
+  mutate(
+    cum_cases = ifelse(cum_cases < lag(cum_cases, default = first(cum_cases)), lag(cum_cases), cum_cases)
+  ) %>%
+  ungroup()
 
 
+# remove the row with "*" in the df
+full_region_df <- full_region_df %>%
+  mutate(
+    per_100k = ifelse(grepl("\\*", per_100k), gsub("\\*", "", per_100k), per_100k),
+    per_100k = as.numeric(per_100k)
+  )
 
-# Loop through the zero indices and replace with interpolated values
-# cum deaths
-for (i in zero_indices_to_interpolate) {
-  prev_day <- max(which(full_region_df$cum_deaths[1:i] > 0))
-  next_day <- min(which(full_region_df$cum_deaths[i:length(full_region_df$cum_deaths)] > 0))
-  # Check if the previous and next day values are zero, and if so, skip interpolation
-  if (full_region_df$cum_deaths[prev_day] == 0 && full_region_df$cum_deaths[next_day] == 0) {
-    next
-  }
-  interpolated_value <- approx(x = c(prev_day, next_day), y = full_region_df$cum_deaths[c(prev_day, next_day)], xout = i)$y
-  full_region_df$cum_deaths[i] <- interpolated_value
-}
-# target_date <- as.Date("2022-03-30")
+# First, make sure that 'cum_cases' and 'per_100k' are numeric
+full_region_df <- full_region_df %>%
+  mutate(
+    cum_cases = as.numeric(cum_cases),
+    per_100k = as.numeric(per_100k)
+  )
+
+# table(is.na(full_region_df))
+
+# # Fix the 'cum_cases' and 'per_100k' by multiplying by 10 for those specific rows
 # full_region_df <- full_region_df %>%
-#   group_by(region) %>%
 #   mutate(
-#     cum_deaths = ifelse(
-#       date == target_date,
-#       round((cum_deaths[which(date == target_date) - 1] + cum_deaths[which(date == target_date) + 1]) / 2),
-#       cum_deaths
-#     )
-#   ) %>%
-#   ungroup()
+#     cum_cases = if_else(original_row_index %in% anomalies_index$original_row_index, cum_cases * 10, cum_cases),
+#     per_100k = if_else(original_row_index %in% anomalies_index$original_row_index, per_100k * 10, per_100k)
+#   )
 
-# cum cases
-for (i in zero_indices_to_interpolate_cum_cases) {
-  prev_day <- max(which(full_region_df$cum_cases[1:i] > 0))
-  next_day <- min(which(full_region_df$cum_cases[i:length(full_region_df$cum_cases)] > 0))
-  # Check if the previous and next day values are zero, and if so, skip interpolation
-  if (full_region_df$cum_cases[prev_day] == 0 && full_region_df$cum_cases[next_day] == 0) {
-    next
-  }
-  interpolated_value <- approx(x = c(prev_day, next_day), y = full_region_df$cum_cases[c(prev_day, next_day)], xout = i)$y
-  full_region_df$cum_cases[i] <- interpolated_value
-}
 
-# daily cases
-for (i in zero_indices_to_interpolate_daily_cases) {
-  prev_day <- max(which(full_region_df$daily_cases[1:i] > 0))
-  next_day <- min(which(full_region_df$daily_cases[i:length(full_region_df$daily_cases)] > 0))
-  # Check if the previous and next day values are zero, and if so, skip interpolation
-  if (full_region_df$daily_cases[prev_day] == 0 && full_region_df$daily_cases[next_day] == 0) {
-    next
-  }
-  interpolated_value <- approx(x = c(prev_day, next_day), y = full_region_df$daily_cases[c(prev_day, next_day)], xout = i)$y
-  full_region_df$daily_cases[i] <- interpolated_value
-}
-
-# df <- full_region_df
-# column_name <- "cum_deaths"
-# date_to_interpolate <- "2022-03-30"
-
-perform_interpolation <- function(df, date_to_interpolate) {
-  regions <- unique(df$region)
-  for (region in regions) {
-    # region<- regions[1]
-    region_data <- df[df$region == region, ]
-    date_indices <- which(region_data$date == date_to_interpolate)
+# Define a function to detect and correct anomalies
+correct_cum_deaths <- function(df) {
+  repeat {
+    # Add a row index to the data frame for reference
+    df <- df %>%
+      mutate(original_row_index = row_number())
     
-    if(length(date_indices) > 1) { # Only proceed if there are duplicates
-      correct_index <- which.max(region_data$cum_cases[date_indices])
-      incorrect_index <- which.min(region_data$cum_cases[date_indices])
-      
-      # Identify the corresponding full indices in df
-      incorrect_rows <- which(df$region == region & df$date == date_to_interpolate)
-      full_index_to_remove <- incorrect_rows[incorrect_index]
-      
-      # Remove the incorrect index from the main DataFrame
-      df <- df[-full_index_to_remove, ]
+    # Calculate the previous day's cumulative deaths for each region
+    df <- df %>%
+      group_by(region) %>%
+      arrange(region, date) %>%
+      mutate(prev_cum_deaths = lag(cum_deaths)) %>%
+      ungroup()
+    
+    # Detect anomalies
+    anomalies <- df %>%
+      filter(cum_deaths < prev_cum_deaths) %>%
+      select(original_row_index, region, date, cum_deaths, prev_cum_deaths)
+    
+    # Break the loop if there are no more anomalies
+    if (nrow(anomalies) == 0) {
+      break
     }
+    
+    # Correct anomalies
+    df <- df %>%
+      mutate(
+        cum_deaths = if_else(original_row_index %in% anomalies$original_row_index, prev_cum_deaths, cum_deaths)
+      ) %>%
+      select(-prev_cum_deaths, -original_row_index) # Clean up
   }
+  
   return(df)
 }
 
-date_to_interpolate <- "2022-03-30"
-full_region_df <- perform_interpolation(full_region_df, date_to_interpolate)
-date_to_interpolate <- "2022-03-22"
-full_region_df <- perform_interpolation(full_region_df, date_to_interpolate)
-date_to_interpolate <- "2022-03-25"
-full_region_df <- perform_interpolation(full_region_df, date_to_interpolate)
-
-# # Identify the indices for the date 2022-03-30
-# dates_to_interpolate <- c("2022-03-30", "2022-03-22", "2022-03-25")
-# indices_to_interpolate <- which(full_region_df$date %in% dates_to_interpolate)
-# 
-# # Apply interpolation for cum_deaths and cum_cases
-# full_region_df$cum_deaths <- perform_interpolation(full_region_df$cum_deaths, which(full_region_df$date == "2022-03-30"))
-# full_region_df$cum_cases <- perform_interpolation(full_region_df$cum_cases, which(full_region_df$date == "2022-03-30"))
-# 
-# # Apply interpolation for daily_cases for both dates
-# full_region_df$daily_cases <- perform_interpolation(full_region_df$daily_cases, indices_to_interpolate)
+# Apply the correction function to your full_region_df
+full_region_df <- correct_cum_deaths(full_region_df)
 
 
 
+full_region_df <- full_region_df %>%
+  group_by(region) %>%
+  arrange(region, date) %>%
+  mutate(
+    prev_cum_cases = lag(cum_cases, order_by = date),
+    calculated_daily_cases = cum_cases - ifelse(is.na(prev_cum_cases), 0, prev_cum_cases),
+    daily_cases_correct = if_else(is.na(prev_cum_cases), daily_cases, calculated_daily_cases),
+    # Flag rows where daily_cases does not match the calculated daily cases
+    incorrect_daily_cases = daily_cases != calculated_daily_cases
+  ) %>%
+  ungroup()
+
+incorrect_indices <- which(full_region_df$incorrect_daily_cases)
+
+# Correct the daily_cases values
+full_region_df <- full_region_df %>%
+  mutate(
+    daily_cases = if_else(incorrect_daily_cases, calculated_daily_cases, daily_cases)
+  ) %>%
+  select(-c(prev_cum_cases, calculated_daily_cases, incorrect_daily_cases, daily_cases_correct)) # Clean up helper columns
+
+# Add daily deaths to the full_region_df
+full_region_df <- full_region_df %>%
+  group_by(region) %>%
+  arrange(region, date) %>%
+  mutate(
+    prev_cum_deaths = lag(cum_deaths, order_by = date),  # Get the previous day's cumulative deaths
+    daily_deaths = cum_deaths - ifelse(is.na(prev_cum_deaths), 0, prev_cum_deaths)  # Calculate the daily deaths
+  ) %>%
+  ungroup() %>%
+  select(-prev_cum_deaths)
+
+#remove first row of df from each region
+full_region_df <- full_region_df %>%
+  filter(date != "2020-01-20")
+
+# match region names Eng/Kor
 south_korea_ch <- south_korea
 south_korea_ch$name <- region_match$eng[match(south_korea_ch$name, region_match$kor)]
-
 
 # Merge COVID-19 data with South Korea polygon data
 # merged_data <- merge(south_korea_ch, region_df, by.x = "name", by.y = "region", all.x = TRUE)
@@ -215,18 +214,39 @@ non_numeric_dates <- full_merged_data[!is.na(as.numeric(full_merged_data$date)),
 # Remove rows with non-numeric dates
 full_merged_data <- full_merged_data[!is.na(as.numeric(full_merged_data$date)), ]
 
+# table(is.na(full_merged_data))
+
+
+
+# For plot selection
+plot_name_list_single <- c("bar" = "Bar plot", 
+                           "line" = "Line plot",
+                           "area" = "Area plot")
+
+plot_name_list_multi <- c("bar" = "Stacked bar plot", 
+                          "line" = "Line plot",
+                          "area" = "Stacked area plot")
+
+# Total regions
+region_list <- full_merged_data$name %>% unique
 
 # Set min_date and max_date
 min_date <- min(full_merged_data$date)
 max_date <- max(full_merged_data$date)
 
-# Create total cases
+# Create total cases & proportional cases
 full_merged_data <- full_merged_data %>%
   group_by(date) %>%
   mutate(total_cases = sum(daily_cases))
-
 full_merged_data <- full_merged_data %>%
   mutate(prop_cases = round(daily_cases / total_cases, 4))
+
+# Create total deaths & proportional deaths
+full_merged_data <- full_merged_data %>%
+  group_by(date) %>%
+  mutate(total_deaths = sum(daily_deaths))
+full_merged_data <- full_merged_data %>%
+  mutate(prop_deaths = round(daily_deaths / total_deaths, 4))
 
 # Create a column for the month
 full_merged_data$month <- month(full_merged_data$date)
@@ -241,6 +261,15 @@ full_merged_data$population <- as.numeric(full_merged_data$population)
 full_merged_data <- full_merged_data %>%
   mutate(region_cases = round(daily_cases / population, 4))
 
+# Calculate the average number of deaths by month and region(name)
+full_merged_data <- full_merged_data %>%
+  group_by(name, month) %>%
+  mutate(avg_monthly_deaths = round(mean(daily_deaths), 0))
+
+# Calculate the average number of deaths by regions
+full_merged_data <- full_merged_data %>%
+  mutate(region_deaths = round(daily_deaths / population, 4))
+
 # Remove duplicates
 full_merged_data <- unique(full_merged_data)
 
@@ -248,9 +277,13 @@ full_merged_data <- unique(full_merged_data)
 
 num1 <- seq(0, 2000, by = 250)
 cv_pal_c <- colorBin("RdYlGn", domain = full_merged_data$prop_cases, bins = c(0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.1, 0.2, 0.3, 0.4, 1), reverse = TRUE)
+cv_pal_d <- colorBin("RdYlGn", domain = full_merged_data$prop_deaths, bins = c(0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.1, 0.2, 0.3, 0.4, 1), reverse = TRUE)
 cv_pal_c_montly <- colorBin("RdYlGn", domain = full_merged_data$region_cases, bins = c(0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.1, 0.2, 0.3, 0.4, 1), reverse = TRUE)
-cv_pal_daily <- colorBin("RdYlGn", domain = full_merged_data$daily_cases, bins = c(0, 100, 500, 1000, 1500, 2000, Inf), reverse = TRUE)
-cv_pal_avg_daily <- colorBin("RdYlGn", domain = full_merged_data$avg_monthly_cases, bins = c(0, 100, 500, 1000, 1500, 2000, Inf), reverse = TRUE)
+cv_pal_d_montly <- colorBin("RdYlGn", domain = full_merged_data$region_deaths, bins = c(0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.1, 0.2, 0.3, 0.4, 1), reverse = TRUE)
+cv_pal_c_daily <- colorBin("RdYlGn", domain = full_merged_data$daily_cases, bins = c(0, 100, 500, 1000, 1500, 2000, Inf), reverse = TRUE)
+cv_pal_d_daily <- colorBin("RdYlGn", domain = full_merged_data$daily_deaths, bins = c(0, 5, 10, 20, 50, 100, Inf), reverse = TRUE)
+cv_pal_c_avg_daily <- colorBin("RdYlGn", domain = full_merged_data$avg_monthly_cases, bins = c(0, 100, 500, 1000, 1500, 2000, Inf), reverse = TRUE)
+cv_pal_d_avg_daily <- colorBin("RdYlGn", domain = full_merged_data$avg_monthly_deaths, bins = c(0, 10, 50, 100, 150, 200, Inf), reverse = TRUE)
 
 ############ centroids ###############
 
@@ -266,12 +299,7 @@ suppressWarnings({
 })
 
 
-# library(shinyBS)
-
-
 fieldsMandatory <- c("selectedCountry", "seedData")
-
-#hoverDrop <- "selectedCountry"
 
 labelMandatory <- function(label) {
   tagList(
@@ -291,7 +319,13 @@ appCSS <- ".mandatory_star {color: red;}"
 appCSS <- ".invisible {display:none;}"
 appCSS <- ".dropDown:hover {color:ADD8E6;background-color: #000000}"
 
+
+
+############################ UI Component ############################
+
+
 ui <- bootstrapPage(
+  shinyjs::useShinyjs(), 
   tags$head(
     includeHTML("Korea viz/data/gtag.html"),
     includeCSS("Korea viz/data/custom_styles.css"),
@@ -312,7 +346,9 @@ ui <- bootstrapPage(
         background-color: #007BFF !important;  /* Lighter shade of blue */
         color: white !important;
       }
-
+      .leaflet-container {
+        background-color: #FAFAFA;  
+      }
     ")),
     tags$script("
     $(document).ready(function(){
@@ -320,21 +356,18 @@ ui <- bootstrapPage(
         $('.active').removeClass('custom-tab1').removeClass('custom-tab2');
       });
     });
+    $(document).on('shiny:connected', function(event) {
+      var w = window.innerWidth;
+      var h = window.innerHeight;
+      Shiny.setInputValue('screen_width', w);
+      Shiny.setInputValue('screen_height', h);
+    });
   ")
   ),
-  add_busy_spinner(
-    spin = "half-circle",       # Changing to "cube-grid" for a different fancy effect. Choose any other from the library if desired.
-    color = "#112446",
-    timeout = 100,
-    position = "bottom-left",   # Using full-page to enable centering.
-    onstart = TRUE,
-    margins = c(350, 600),        # No margins to ensure proper centering.
-    height = "50px",
-    width = "50px"),
   navbarPage(
     theme = shinytheme("cosmo"),
     collapsible = TRUE,
-    HTML('<a style="text-decoration:none;cursor:default;color:#FFFFFF;" class="active" href="#">Covid Track Korea</a>'), 
+    HTML('<a style="text-decoration:none;cursor:default;color:#FFFFFF;" class="active" href="#">K-Covid Track</a>'), 
     id="nav",
     windowTitle = "K-Covid Track",
     
@@ -346,45 +379,35 @@ ui <- bootstrapPage(
         leafletOutput("mymap", width="100%", height="100%"),
         
         absolutePanel(id = "controls", class = "panel panel-default",
-                      top = 100, left = 55, width = 300, fixed=TRUE,
-                      draggable = TRUE, height = "auto", 
+                      top = 100, left = 55, width = 350, fixed=TRUE,
+                      draggable = TRUE, height = 500, 
                       style = "background-color: #f5f5f7; border-radius: 10px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); padding: 15px; opacity: 0.95;",
                       
                       tabsetPanel(id = "tabs",
-                                  tabPanel("Map 1",
+                                  tabPanel("Map",
                                            class = "custom-tab1",
-                                           h6("Please select a date to visualize:"),
+                                           h6("Please select a date to visualize:", style = "font-size: 18px;"),  # Increase font-size to 18px
                                            
                                            sliderInput(
                                              "date_slider", "Date", 
                                              min = min_date,
                                              max = max_date,
                                              value = min_date,
-                                             timeFormat="%d %b %Y"
+                                             timeFormat = "%d %b %Y",
+                                             width = "100%"  # Set width to 100%
                                            ),
                                            
-                                           h6("Select the overlay group to visualize."),
+                                           h6("Select the overlay group to visualize.", style = "font-size: 16px;"),  # Increase font-size to 18px
                                            
                                            selectInput(
                                              "overlayGroup", "Select Overlay Group",
-                                             choices = c("daily_cases", "daily_cases (proportion)")
-                                           )
+                                             choices = c("daily_cases", "daily_cases (proportion)", "daily_deaths", "daily_deaths (proportion)"),
+                                             width = "100%"  # Set width to 100%
+                                           ),
+                                           
+                                           h6("daily_cases (proportion): daily cases by region / total daily cases", style = "font-size: 14px;"),  # Increase font-size to 16px
+                                           h6("daily_deaths (proportion): daily deaths by region / total daily deaths", style = "font-size: 14px;")
                                   )
-                                  # ,
-                                  # tabPanel("Map 2",
-                                  #          class = "custom-tab2",
-                                  #          h6("Please select a date range:"),
-                                  #          sliderInput(
-                                  #            "month_range", "Month Range",
-                                  #            min = as.Date("2020-01-20"),
-                                  #            max = as.Date("2023-05-27"),
-                                  #            value = c(as.Date("2020-01-20"), as.Date("2023-05-27")), # Default value is the entire range
-                                  #            step = 30,                       # Approximate number of days in a month
-                                  #            timeFormat = "%b %Y"             # Display in "Month Year" format
-                                  #          ),
-                                  #          actionButton("submit", "Submit"),
-                                  #          fluidRow(id = "map_container")
-                                  # )
                       )
         )
       )
@@ -394,17 +417,21 @@ ui <- bootstrapPage(
              sidebarLayout(
                sidebarPanel(
                  span(tags$i(h6("Select the region and the outcome variable")), style="color:#045a8d"),
-                
+                 
                  pickerInput("region_select", "Region:",   
                              choices <- south_korea_ch$name, 
                              selected = c("Seoul"),
-                             multiple = FALSE),
+                             multiple = TRUE),
                  
                  pickerInput("outcome_select", "Outcome:",   
-                             choices = c("Raw new cases", "Cummulative cases", "Cummulative deaths"), 
-                             selected = c("Raw new cases"),
+                             choices = c("Daily cases", "Cummulative cases", "Daily deaths", "Cummulative deaths"), 
+                             selected = c("Daily cases"),
                              multiple = FALSE),
                  
+                 #Input for p_type
+                 selectInput("p_type_input", "Select Plot Type:", 
+                             choices = c("area", "line", "bar"), 
+                             selected = "area"),
                ),
                
                mainPanel(
@@ -416,21 +443,20 @@ ui <- bootstrapPage(
                )
              )
     ),
-    
-    
     tabPanel(
-      title = "Model",
+      title = "Simulation",
       sidebarLayout(
         sidebarPanel(
           shinyjs::useShinyjs(),
           shinyjs::inlineCSS(appCSS),
           div(
             id = "dashboard",
-            
-            uiOutput("countryDropdown"),
-            
-            #checkboxInput(inputId = "filterLMIC", label = strong("Show LMIC only"), value = FALSE),
-            
+
+            textInput("selectedCountry", "Selected Country", value = "South Korea"),
+
+            hidden(
+              checkboxInput(inputId = "filterLMIC", label = strong("Show LMIC only"), value = FALSE)
+            ),
             uiOutput("clipStateCheckbox"),
             
             conditionalPanel(condition = "input.clipLev1 == '1'", uiOutput("Level1Ui")),
@@ -445,7 +471,7 @@ ui <- bootstrapPage(
               id = "SEIRD_SVEIRD",
               withMathJax(),
               
-              h5("Model Parameters:", style = "font-weight: bold; font-size:11.5pt"),
+              h5("Model Parameters:", style = "font-weight: bold; font-size:13pt"),
               
               conditionalPanel(
                 id = "SVEIRD",
@@ -467,13 +493,7 @@ ui <- bootstrapPage(
               
               uiOutput("lambdaInput"),
               
-              radioButtons(
-                inputId = "dataSelect",
-                label = "Choose data source:",
-                choices = c("Use provided seed data", "Upload your own seed data"),
-                selected = "Use provided seed data",
-                inline = FALSE
-              ),
+              downloadButton("downloadSeedData", "Download Sample Seed Data"),
               
               uiOutput("seedUpload"),
               
@@ -505,8 +525,6 @@ ui <- bootstrapPage(
               tableOutput("table"),
               imageOutput("outputImage"),
               imageOutput("croppedOutputImage"),
-              #imageOutput("seededOutputImage"),
-              #downloadButton(outputId = "downloadSummary", label = "Save Input Summary as a PDF File")
             ),
             
             tabPanel(
@@ -540,7 +558,6 @@ ui <- bootstrapPage(
               title = "Output Summary",
               icon = icon("table"),
               dataTableOutput("outputSummary")
-              # downloadButton(outputId = "downloadOutputSummary", label = "Save Output Summary")
             ),
             
             tabPanel(
@@ -562,14 +579,10 @@ ui <- bootstrapPage(
              tags$div(
                tags$h4("Last update"), 
                # h6(paste0(max_date)),2023-05-27
-               h6(paste0("2023-09-05")),
-               # "This site is updated once daily.", tags$br(),tags$br(),
-               # tags$a(href="https://experience.arcgis.com/experience/685d0ace521648f8a5beeeee1b9125cd", "the WHO,"),
-               # tags$a(href="https://gisanddata.maps.arcgis.com/apps/opsdashboard/index.html#/bda7594740fd40299423467b48e9ecf6", "Johns Hopkins University,"),"and",
-               # tags$a(href="https://ourworldindata.org/coronavirus-data-explorer?zoomToSelection=true&time=2020-03-01..latest&country=IND~USA~GBR~CAN~DEU~FRA&region=World&casesMetric=true&interval=smoothed&perCapita=true&smoothing=7&pickerMetric=total_cases&pickerSort=desc", "Our World in Data."),
+               h6(paste0("2023-11-06")),
                
-               "This site provides information about the spread of COVID-19 in South Korea. The data is sourced from the Korean Centers for Disease Control and Prevention (KCDC).", tags$br(),tags$br(),
-               
+               "This site provides information about the spread of COVID-19 in South Korea. The data is sourced from the Korean Centers for Disease Control and Prevention (KCDC).", tags$br(),
+               "Please be advised that, following the reclassification of COVID-19 as a Class 4 infectious disease by the KCDC, the regular updates to the provincial incidence data have been discontinued as of September 1, 2023.", tags$br(),tags$br(),
                
                
                "The simulation model uses a mathematical model to simulate COVID-19 outcomes in South Korea based on user-defined parameters.",tags$br(),
@@ -581,9 +594,8 @@ ui <- bootstrapPage(
                
                
                tags$br(),tags$br(),tags$h4(tags$b("Code")),
-               "Code and input data used to generate this Shiny mapping tool are available on ",tags$a(href="https://github.com/", "Github."),
+               "Code and input data used to generate this Shiny mapping tool are available on ",tags$a(href="https://github.com/ron1891/K-CovidTrack", "Github."),
                tags$br(),tags$br(),tags$h4(tags$b("Sources")),
-               # tags$b("2019-COVID cases: "), tags$a(href="https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", "Johns Hopkins Center for Systems Science and Engineering github page,")," with additional information from the ",tags$a(href="https://www.who.int/emergencies/diseases/novel-coronavirus-2019/situation-reports", "WHO's COVID-19 situation reports."),
                "COVID-19 cases: ", tags$a(href="https://www.data.go.kr/en/index.do", "Public Data Portal,")," with additional information from the ",tags$a(href="https://ncov.kdca.go.kr/en/", "Central Disease Control Headquarters of South Korea."),
                
                
@@ -595,8 +607,8 @@ ui <- bootstrapPage(
                "Gwanak_1 Gwanak-ro, Gwanak-gu", tags$br(),
                "Seoul, Korea 08826", tags$br(),tags$br(),
                
-             
-               "Hanbyul Song, Gyulhee Han, Catherine Apio, Jiwon Park, Zhe Liu, and Hu Xuwen", tags$br(), 
+               
+               "Hanbyul Song, Gyulhee Han, Taewan Goo, Catherine Apio, Jiwon Park, and Zhe Liu", tags$br(), 
                "Graduate Student, Seoul National University, Seoul, Korea 08826",tags$br(), 
                
                
@@ -606,15 +618,22 @@ ui <- bootstrapPage(
                
                
                tags$br(),tags$br(),tags$h4(tags$b("Contact")),
-               "taesungp@gmail.com",tags$br(),
+               "tspark@stats.snu.ac.kr",tags$br(),
+               "byul1891@gmail.com",tags$br(),
                "http://bibs.snu.ac.kr/",tags$br(),tags$br(),
                tags$img(src = "bibs.png", width = "275px", height = "75px")
                
-            
+               
              )
     )
   )
 )
+
+
+
+
+
+############################ Server Component ############################
 
 
 # setwd("C:/Users/ron18/Desktop/2022-1/bibs/mathematical model/R code-20230112T042318Z-001/R code")
@@ -623,61 +642,105 @@ server <- function(input, output, session){
   
   ############ Map tab ############
   
-  output$mymap <- renderLeaflet({
-    selected_date <- input$date_slider
-    selected_date_range <- input$month_range
-    overlayGroup <- input$overlayGroup
-    filtered_data <- full_merged_data[full_merged_data$date == as.Date(selected_date), ]
+  observe({
     
-    if(as.character(overlayGroup) == 'daily_cases'){
-      cv_pal <- cv_pal_daily
+    width <- as.numeric(input$screen_width)
+    height <- as.numeric(input$screen_height)
+    
+    if(is.null(width) || length(width) == 0) return()
+    
+    if(width > 1200) {
+      focus_lat <- 36.2
+      focus_lng <- 127.5
+      zoom_level <- 10
     } else {
-      overlayGroup <- 'prop_cases'
-      cv_pal <- cv_pal_c
+      focus_lat <- 36.2
+      focus_lng <- 127.5
+      zoom_level <- 5
     }
     
-    basemap <- leaflet(options = leafletOptions(zoomControl = FALSE,
-                                                minZoom = 7, maxZoom = 8, dragging = TRUE)) %>%
-      addTiles() %>%
-      # addLayersControl(
-      #   position = "bottomright",
-      #   overlayGroups = c("Number of Cases (raw)", "Number of Cases (proportional)"),
-      #   options = layersControlOptions(collapsed = FALSE)
-      # ) %>%
-      hideGroup(c("2019-COVID (cumulative)", "Cumulative Deaths")) %>%
-      addProviderTiles(providers$CartoDB.Positron) %>%
-      setView(lng = 127.5, lat = 36.2, zoom = 7) %>%
-      addPolygons(
-        data = filtered_data,
-        fillColor = ~cv_pal(get(overlayGroup)),
-        color = "black",
-        weight = 1,
-        fillOpacity = 0.7,
-        label = ~paste0(
-          "<strong>", name,'</strong><br>Daily cases: ', daily_cases, '</strong><br>Daily case (proportion): ', prop_cases*100,'%', '</strong><br>Cumulative cases: ', cum_cases) %>%
-          lapply(htmltools::HTML),
-        labelOptions = labelOptions(noHide = FALSE, direction = "auto", style = list("font-weight" = "normal", "text-align" = "center"), textsize = "15px"),
-        highlightOptions = highlightOptions(
-          weight = 3,  # Increase the stroke weight of the highlighted region
-          fillOpacity = 1,  # Increase the fill opacity of the highlighted region
-          fillColor = "#FFCC99",  # Set the fill color of the highlighted region
-          color = "#FF6600"  # Set the stroke color of the highlighted region
-        )
-      ) %>%
-      addLegend(
-        "bottomright",
-        pal = cv_pal,
-        values = filtered_data[,overlayGroup],
-        title = overlayGroup
-      )%>%
-      setMaxBounds(lng1 = 127.5 + 5,
-                   lat1 = 36.2 + 3,
-                   lng2 = 127.5 - 5,
-                   lat2 = 36.2 - 3)
-    
-    basemap
-    
+    output$mymap <- renderLeaflet({
+      selected_date <- input$date_slider
+      selected_date_range <- input$month_range
+      overlayGroup <- input$overlayGroup
+      filtered_data <- full_merged_data[full_merged_data$date == as.Date(selected_date), ]
+      
+      
+      if(as.character(overlayGroup) == 'daily_cases'){
+        overlayGroup <- 'daily_cases'
+        cv_pal <- cv_pal_c_daily
+        display_data <- "cases"
+      } else if (as.character(overlayGroup) == 'daily_cases (proportion)') {
+        overlayGroup <- 'prop_cases'
+        cv_pal <- cv_pal_c
+        display_data <- "cases"
+        filtered_data$prop_cases[is.na(filtered_data$prop_cases)] <- 0
+      } else if (as.character(overlayGroup) == 'daily_deaths') {
+        overlayGroup <- 'daily_deaths'
+        cv_pal <- cv_pal_d_daily
+        display_data <- "deaths"
+      } else if (as.character(overlayGroup) == 'daily_deaths (proportion)') {
+        overlayGroup <- 'prop_deaths'
+        cv_pal <- cv_pal_d  
+        display_data <- "deaths"
+        filtered_data$prop_deaths[is.na(filtered_data$prop_deaths)] <- 0
+      }
+      
+      # Define a reactive expression for labels
+      labelContent <- reactive({
+        if (display_data == "cases") {
+          return(filtered_data %>%
+                   mutate(label_text = paste0("<strong>", name, "</strong><br>Daily cases: ", daily_cases,
+                                              "<br>Daily case (proportion): ", round(prop_cases * 100, 2), '%',
+                                              "<br>Cumulative cases: ", cum_cases)) %>%
+                   .$label_text %>%
+                   lapply(htmltools::HTML))
+        } else if (display_data == "deaths") {
+          return(filtered_data %>%
+                   mutate(label_text = paste0("<strong>", name, "</strong><br>Daily deaths: ", daily_deaths,
+                                              "<br>Daily death (proportion): ", round(prop_deaths * 100, 2), '%',
+                                              "<br>Cumulative deaths: ", cum_deaths)) %>%
+                   .$label_text %>%
+                   lapply(htmltools::HTML))
+        }
+      })
+      
+      basemap <- leaflet(options = leafletOptions(zoomControl = FALSE,
+                                                  minZoom = 7, maxZoom = 8, dragging = TRUE)) %>%
+
+        hideGroup(c("2019-COVID (cumulative)", "Cumulative Deaths")) %>%
+        setView(lng = 127.5, lat = 36.2, zoom = 7) %>%
+        addPolygons(
+          data = filtered_data,
+          fillColor = ~cv_pal(get(overlayGroup)),
+          color = "black",
+          weight = 1,
+          fillOpacity = 0.7,
+          label = ~labelContent(),
+          labelOptions = labelOptions(noHide = FALSE, direction = "auto", style = list("font-weight" = "normal", "text-align" = "center"), textsize = "15px"),
+          highlightOptions = highlightOptions(
+            weight = 3,  # Increase the stroke weight of the highlighted region
+            fillOpacity = 1,  # Increase the fill opacity of the highlighted region
+            fillColor = "#FFCC99",  # Set the fill color of the highlighted region
+            color = "#FF6600"  # Set the stroke color of the highlighted region
+          )
+        ) %>%
+        addLegend(
+          "bottomright",
+          pal = cv_pal,
+          values = filtered_data[,overlayGroup],
+          title = overlayGroup
+        )%>%
+        setMaxBounds(lng1 = 127.5 + 5,
+                     lat1 = 36.2 + 3,
+                     lng2 = 127.5 - 5,
+                     lat2 = 36.2 - 3)
+      basemap
+      
+    })
   })
+  
+  
   
   # Listen to overlayGroup and displayGroup
   observe({
@@ -693,10 +756,10 @@ server <- function(input, output, session){
       overlayGroup <- input$overlayGroup
       
       if(as.character(overlayGroup) == 'avg_monthly_cases'){
-        cv_pal <- cv_pal_avg_daily
+        cv_pal <- cv_pal_c_avg_daily
       } else {
         overlayGroup <- 'avg_monthly_cases'
-        cv_pal <- cv_pal_avg_daily
+        cv_pal <- cv_pal_c_avg_daily
       }
       
       
@@ -753,8 +816,7 @@ server <- function(input, output, session){
           # Create the leaflet map using the data for the current month (modify this to fit your visualization)
           leaflet(options = leafletOptions(zoomControl = FALSE,
                                            minZoom = 6, maxZoom = 6.1, dragging = FALSE)) %>%
-            addTiles() %>%
-            addProviderTiles(providers$CartoDB.Positron) %>%
+            # addTiles() %>%
             setView(lng = 127.5, lat = 36.2, zoom = 6) %>%
             addPolygons(
               data = month_data,
@@ -782,9 +844,9 @@ server <- function(input, output, session){
       # Update the reactive value with the new map IDs
       current_maps(new_map_ids)
       
-      }, error = function(e) {
-        print(e)
-      })
+    }, error = function(e) {
+      print(e)
+    })
   })
   
   
@@ -792,35 +854,94 @@ server <- function(input, output, session){
   ######## region tab ##########
   
   # Define a mapping between selected outcome and column name
-  outcome_mapping <- c("Raw new cases" = "daily_cases",
+  outcome_mapping <- c("Daily cases" = "daily_cases",
                        "Cummulative cases" = "cum_cases",
+                       "Daily deaths" = "daily_deaths",
                        "Cummulative deaths" = "cum_deaths")
   
   output$region_plot_raw <- renderPlotly({
     # Filter data based on selected region
     selected_region <- input$region_select
     selected_outcome <- input$outcome_select
+    p_type <- input$p_type_input
     
-    filtered_data <- full_merged_data[full_merged_data$name == selected_region, ]
+    min_date <- min(full_merged_data$date)
+    max_date <- max(full_merged_data$date)
+    
+    region_order <- full_merged_data %>% filter(date == max(full_merged_data$date)) %>% 
+      arrange(-cum_cases) %>% .[["name"]]
+    
     # Get the column name corresponding to the selected outcome from the mapping
     outcome_column <- outcome_mapping[selected_outcome]
     
-    # Sort the data by date
-    filtered_data <- filtered_data[order(filtered_data$date), ]
+    filtered_data_m <- full_merged_data %>% #filter(date >= as.Date("2022-01-01")) %>% 
+      mutate(name = factor(name, levels = region_order)) %>% 
+      filter(name %in% selected_region) %>% 
+      mutate(name = droplevels(name)) %>% 
+      rename(y = outcome_column %>% as.character()) %>% ungroup() %>% 
+      dplyr::select(name, date, y)
     
-    # Define color palette
-    point_color <- "black"
-    line_color <- "black"
+    if(length(selected_region) == 1){
+      
+      if(p_type == "area"){
+        plot_raw_m <- ggplot(filtered_data_m, aes(x = date, y = y, fill = name)) +
+          geom_area(alpha = 0.7) +
+          geom_line(size = 0.5, col = "tomato") 
+      }else if(p_type == "line"){
+        plot_raw_m <- ggplot(filtered_data_m, aes(x = date, y = y, fill = name, col = name)) +
+          geom_line(size = 0.5)
+      }else if(p_type == "bar"){
+        plot_raw_m <- ggplot(filtered_data_m, aes(x = date, y = y, fill = name)) +
+          geom_col(width = 1, alpha = 0.8, col = "tomato")
+      }else{
+        break
+      }
+      
+      # add titles
+      plot_raw_m <- plot_raw_m +
+        labs(title = paste0("Spread of COVID-19 by Region"),
+             subtitle = paste0(plot_name_list_single[[p_type]], ", ", selected_outcome, " (", selected_region, ")"),
+             x = "Date",
+             y = selected_outcome, fill = "Region", col = "tomato") +
+        guides(fill = guide_legend(title = "Region"), 
+               color = guide_legend(title = "Region"))
+      
+      
+    }else if(length(selected_region) > 1){
+      if(p_type == "area"){
+        plot_raw_m <- ggplot(filtered_data_m, aes(x = date, y = y, fill = name, col = name)) +
+          geom_area(alpha = 0.7)
+      }else if(p_type == "line"){
+        plot_raw_m <- ggplot(filtered_data_m, aes(x = date, y = y, fill = name, col = name)) +
+          geom_line(size = 0.5, alpha = 0.7)
+      }else if(p_type == "bar"){
+        plot_raw_m <- ggplot(filtered_data_m, aes(x = date, y = y, fill = name, col = name)) +
+          geom_col(width = 1, position = "stack", alpha = 0.8)
+        
+      }else{
+        break
+      }
+      
+      if(length(selected_region) == 2){
+        # add titles
+        plot_raw_m <- plot_raw_m +
+          labs(title = paste0("Spread of COVID-19 by Region"),
+               subtitle = paste0(plot_name_list_multi[[p_type]], ", ", selected_outcome, " (", paste(selected_region, collapse = ", "), ")"),
+               x = "Date",
+               y = selected_outcome, fill = "Region", col = "Region")
+      }else{
+        plot_raw_m <- plot_raw_m +
+          labs(title = paste0("Spread of COVID-19 by Region"),
+               subtitle = paste0(plot_name_list_multi[[p_type]], ", ", selected_outcome, " (", length(selected_region), " regions)"),
+               x = "Date",
+               y = selected_outcome, fill = "Region", col = "Region")
+      }
+    }
     
-    # Create the raw plot based on the selected outcome
-    plot_raw <- ggplot(filtered_data, aes(x = date, y = .data[[outcome_column]])) +
-      geom_point(color = point_color, size = 1) +
-      geom_line(color = line_color, size = 0.5) +
-      labs(title = paste0("COVID-19 ", selected_outcome, " Over Time (Raw)"),
-           x = "Date",
-           y = selected_outcome) +
-      theme_minimal() +
-      theme(plot.title = element_text(size = 16, face = "bold"),
+    plot_raw_m <- plot_raw_m +
+      theme_bw() +
+      theme(plot.title=element_text(size=16, hjust=0.5, face="bold", colour="black", vjust=2),
+            plot.subtitle=element_text(size=12, hjust=0.5, face="italic", color="maroon", vjust=2),
             axis.title = element_text(size = 14),
             axis.text = element_text(size = 12),
             axis.line = element_line(color = "gray"),
@@ -828,58 +949,25 @@ server <- function(input, output, session){
             panel.grid.minor = element_blank(),
             panel.background = element_rect(fill = "white", color = "gray"),
             legend.position = "bottom",
-            legend.title = element_blank(),
             legend.text = element_text(size = 12),
-            legend.background = element_rect(fill = "white", color = "gray")) +
-      scale_color_manual(values = c(point_color, line_color))
+            legend.background = element_rect(fill = "white", color = "gray"))
+
+    plotly_obj <- ggplotly(plot_raw_m, height = 450) %>% 
+      layout(
+        xaxis = list(
+          rangeslider = list(
+            type = "date",
+            rangemode = "auto",
+            thickness = 0.12,
+            start = min_date,
+            end = max_date
+          )
+        )
+      )
     
-    plot_raw
+    plotly_obj
+ 
   })
-  
-  output$region_plot_smoothed <- renderPlotly({
-    # Filter data based on selected region and outcome
-    selected_region <- input$region_select
-    selected_outcome <- input$outcome_select
-    
-    filtered_data <- full_merged_data[full_merged_data$name == selected_region, ]
-    
-    # Get the column name corresponding to the selected outcome from the mapping
-    outcome_column <- outcome_mapping[selected_outcome]
-    
-    # Perform smoothing (e.g., moving average) on the data
-    # smoothed_data <- ...
-    
-    # Sort the data by date
-    filtered_data <- filtered_data[order(filtered_data$date), ]
-    
-    # Define color palette
-    point_color <- "black"
-    line_color <- "black"
-    
-    # Create the raw plot based on the selected outcome
-    plot_raw <- ggplot(filtered_data, aes(x = date, y = .data[[outcome_column]])) +
-      geom_point(color = point_color, size = 1.5, shape = 13) +
-      geom_line(color = line_color, size = 1) +
-      labs(title = paste0("COVID-19 ", selected_outcome, " Over Time (Smoothed)"),
-           x = "Date",
-           y = selected_outcome) +
-      theme_minimal() +
-      theme(plot.title = element_text(size = 16, face = "bold"),
-            axis.title = element_text(size = 14),
-            axis.text = element_text(size = 12),
-            axis.line = element_line(color = "gray"),
-            panel.grid.major = element_blank(),
-            panel.grid.minor = element_blank(),
-            panel.background = element_rect(fill = "white", color = "gray"),
-            legend.position = "bottom",
-            legend.title = element_blank(),
-            legend.text = element_text(size = 12),
-            legend.background = element_rect(fill = "white", color = "gray")) +
-      scale_color_manual(values = c(point_color, line_color))
-    
-    plot_raw
-  })
-  
   
   ######## simulation tab ##########
   
@@ -916,7 +1004,17 @@ server <- function(input, output, session){
   values$df <- data.frame(Variable = character(), Value = character()) 
   output$table <- renderTable(values$df)
   
+  observe({
+    shinyjs::hide("countryDropdown")
+    shinyjs::hide("clipStateCheckbox")
+    shinyjs::hide("Level1Ui")
+    input$selectedCountry == "South Korea"
+    input$clipLev1 == FALSE
+  })
+  
   observeEvent(input$go, {
+    req(input$selectedCountry, input$clipLev1, input$level1List, input$agg)
+    
     if(input$clipLev1 == TRUE){
       output$croppedOutputImage <- renderImage({
         #source("R/clippingBaseRaster.R")
@@ -933,6 +1031,7 @@ server <- function(input, output, session){
   })
   
   observeEvent(input$go, {
+    req(input$selectedCountry, input$agg)
     output$outputImage <- renderImage({
       source("R/rasterBasePlot.R")
       outfile <- tempfile(fileext = '.png')
@@ -946,7 +1045,7 @@ server <- function(input, output, session){
       # The above line adjusts the dimensions of the base plot rendered in UI
     }, deleteFile = TRUE)
   })
-   
+  
   observeEvent(input$go, {
     output$modelImg <- renderImage({
       return(list(src= "www/ModelEquations.png",
@@ -955,6 +1054,7 @@ server <- function(input, output, session){
   })
   
   observeEvent(input$go, {
+    req(input$modelSelect)
     output$flowchartImg <- renderImage({
       if (input$modelSelect == "SEIRD"){
         return(list(src= "www/SEIRD.png",
@@ -966,7 +1066,7 @@ server <- function(input, output, session){
       }
     }, deleteFile = FALSE)
   })
-   
+  
   observeEvent(input$resetAll, {
     shinyjs::reset("dashboard")
     
@@ -977,7 +1077,7 @@ server <- function(input, output, session){
   observeEvent(input$seedData, {
     values$allow_simulation_run <- TRUE
   })
-    
+  
   observe({
     mandatoryFilled <-
       vapply(fieldsMandatory,
@@ -994,6 +1094,9 @@ server <- function(input, output, session){
     }
   })
   
+  
+  shinyjs::hide("selectedCountry")
+  
   output$countryDropdown <- renderUI({
     pickerInput(inputId = 'selectedCountry',
                 label = labelMandatory("Select Country"),
@@ -1008,7 +1111,6 @@ server <- function(input, output, session){
                 multiple = FALSE)
   })
   
-  
   output$clipStateCheckbox <- renderUI({
     validate(need(!is.null(input$selectedCountry), "")) # catches UI warning
     
@@ -1016,16 +1118,16 @@ server <- function(input, output, session){
       checkboxInput(inputId = "clipLev1", label = strong("Clip State(s)/Province(s)"), value = FALSE)
     }
   })
-      
+  
   output$Level1Ui <- renderUI({
     validate(need(input$clipLev1 == TRUE, "")) # catches UI warning
     
     isoCode <- countrycode(input$selectedCountry, origin = "country.name", destination = "iso3c")
     
     if (file.exists(paste0("gadm/", "gadm36_", toupper(isoCode), "_1_sp.rds"))){
-      level1Options <<- readRDS(paste0("gadm/", "gadm36_", toupper(isoCode), "_1_sp.rds"))$NAME_1 
+      level1Options <<- readRDS(paste0("gadm/", "gadm36_", toupper(isoCode), "_1_sp.rds"))$NAME_1
     } else {
-      level1Options <<- getData("GADM", download = TRUE, level = 1, country = toupper(isoCode))$NAME_1 
+      level1Options <<- getData("GADM", download = TRUE, level = 1, country = toupper(isoCode))$NAME_1
     }
     
     selectizeInput(inputId = "level1List", "",
@@ -1033,7 +1135,7 @@ server <- function(input, output, session){
                    selected = "", multiple = TRUE,
                    options = list(placeholder = "Select state(s)/province(s)"))
   })
-   
+  
   output$aggInput <- renderUI({
     validate(need(!is.null(input$selectedCountry), "")) # catches UI warning
     
@@ -1043,7 +1145,7 @@ server <- function(input, output, session){
                   min = 0, max = 100, step = 1, value = population$reco_rasterAgg[match(input$selectedCountry, population$Country)])
     }
   })
-   
+  
   output$modelRadio <- renderUI({
     validate(need(!is.null(input$selectedCountry), "")) # catches UI warning
     
@@ -1057,7 +1159,7 @@ server <- function(input, output, session){
                    width = "1000px")
     }
   })
-   
+  
   output$stochasticRadio <- renderUI({
     validate(need(!is.null(input$selectedCountry), "")) # catches UI warning
     
@@ -1079,20 +1181,6 @@ server <- function(input, output, session){
     
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
       
-      # if(input$modelSelect == "SEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     alphaValue <- as.numeric(filter(epiparms, ISONumeric == "CZE" & model == "SEIRD")[1,"alpha"])
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     alphaValue <- as.numeric(filter(epiparms, ISONumeric == "NGA" & model == "SEIRD")[1,"alpha"])
-      #   }
-      # } else if (input$modelSelect == "SVEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     alphaValue <- as.numeric(filter(epiparms, ISONumeric == "CZE" & model == "SVEIRD")[1,"alpha"])
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     alphaValue <- as.numeric(filter(epiparms, ISONumeric == "NGA" & model == "SVEIRD")[1,"alpha"])
-      #   }
-      # }
-      
       numericInput(inputId = "alpha",
                    label = "Daily Vaccination Rate (\\( \\alpha\\)):",
                    value = alphaValue, min = 0, max = 1, step = 0.00001)
@@ -1106,20 +1194,6 @@ server <- function(input, output, session){
     
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
       
-      # if(input$modelSelect == "SEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     betaValue <- as.numeric(filter(epiparms, ISONumeric == "CZE" & model == "SEIRD")[1,"beta"])
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     betaValue <- as.numeric(filter(epiparms, ISONumeric == "NGA" & model == "SEIRD")[1,"beta"])
-      #   }
-      # } else if (input$modelSelect == "SVEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     betaValue <- as.numeric(filter(epiparms, ISONumeric == "CZE" & model == "SVEIRD")[1,"beta"])
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     betaValue <- as.numeric(filter(epiparms, ISONumeric == "NGA" & model == "SVEIRD")[1,"beta"])
-      #   }
-      # }
-      
       numericInput(inputId = "beta",
                    label = "Daily Exposure Rate (\\( \\beta\\))", 
                    value = betaValue, min = 0, max = 1, step = 0.00001)
@@ -1132,21 +1206,6 @@ server <- function(input, output, session){
     validate(need(!is.null(input$selectedCountry), "")) # catches UI warning
     
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
-      
-      # if(input$modelSelect == "SEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     gammaValue <- as.numeric(filter(epiparms, ISONumeric == "CZE" & model == "SEIRD")[1,"gamma"])
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     gammaValue <- as.numeric(filter(epiparms, ISONumeric == "NGA" & model == "SEIRD")[1,"gamma"])
-      #   }
-      # } else if (input$modelSelect == "SVEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     gammaValue <- as.numeric(filter(epiparms, ISONumeric == "CZE" & model == "SVEIRD")[1,"gamma"])
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     gammaValue <- as.numeric(filter(epiparms, ISONumeric == "NGA" & model == "SVEIRD")[1,"gamma"])
-      #   }
-      # }
-      
       numericInput(inputId = "gamma",
                    label = "Daily fraction that move out of the exposed compartment to the Infected compartment  (\\( \\gamma\\))", 
                    value = gammaValue, min = 0, max = 1, step = 0.00001)
@@ -1159,20 +1218,6 @@ server <- function(input, output, session){
     validate(need(!is.null(input$selectedCountry), "")) # catches UI warning
     
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
-      
-      # if(input$modelSelect == "SEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     sigmaValue <- as.numeric(filter(epiparms, ISONumeric == "CZE" & model == "SEIRD")[1,"sigma"])
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     sigmaValue <- as.numeric(filter(epiparms, ISONumeric == "NGA" & model == "SEIRD")[1,"sigma"])
-      #   }
-      # } else if (input$modelSelect == "SVEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     sigmaValue <- as.numeric(filter(epiparms, ISONumeric == "CZE" & model == "SVEIRD")[1,"sigma"])
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     sigmaValue <- as.numeric(filter(epiparms, ISONumeric == "NGA" & model == "SVEIRD")[1,"sigma"])
-      #   }
-      # }
       
       numericInput(inputId = "sigma",
                    label = "Daily fraction that move out of the Infected compartment to the recovered compartment (\\( \\sigma \\))", 
@@ -1187,20 +1232,6 @@ server <- function(input, output, session){
     
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
       
-      # if(input$modelSelect == "SEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     deltaValue <- as.numeric(filter(epiparms, ISONumeric == "CZE" & model == "SEIRD")[1,"delta"])
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     deltaValue <- as.numeric(filter(epiparms, ISONumeric == "NGA" & model == "SEIRD")[1,"delta"])
-      #   }
-      # } else if (input$modelSelect == "SVEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     deltaValue <- as.numeric(filter(epiparms, ISONumeric == "CZE" & model == "SVEIRD")[1,"delta"])
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     deltaValue <- as.numeric(filter(epiparms, ISONumeric == "NGA" & model == "SVEIRD")[1,"delta"])
-      #   }
-      # }
-      
       numericInput(inputId = "delta",
                    "Daily fraction that move out of the Infected compartment to the dead compartment (\\(\\delta\\)):",
                    value = deltaValue, min = 0, max = 1, step = 0.00001)
@@ -1214,58 +1245,43 @@ server <- function(input, output, session){
     
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
       
-      # if(input$modelSelect == "SEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     lambdaValue <- as.numeric(filter(epiparms, ISONumeric == "CZE" & model == "SEIRD")[1,"lambda"])
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     lambdaValue <- as.numeric(filter(epiparms, ISONumeric == "NGA" & model == "SEIRD")[1,"lambda"])
-      #   }
-      # } else if (input$modelSelect == "SVEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     lambdaValue <- as.numeric(filter(epiparms, ISONumeric == "CZE" & model == "SVEIRD")[1,"lambda"])
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     lambdaValue <- as.numeric(filter(epiparms, ISONumeric == "NGA" & model == "SVEIRD")[1,"lambda"])
-      #   }
-      # }
-      
       numericInput(inputId = "lambda",
                    "Distance parameter (\\( \\lambda\\), in km):",
                    value = lambdaValue,min = 1, max = 50, step = 1)
     }
   })
   
+  
+  output$downloadSeedData <- downloadHandler(
+    filename = function() {
+      "seeddata/KOR_initialSeedData2022-07-07.csv"  # The name of the file that will be downloaded
+    },
+    content = function(file) {
+      file.copy("seeddata/KOR_initialSeedData2022-07-07.csv", file)  # Copy the file to the download location
+    }
+  )
+  
   output$seedUpload <- renderUI({
     validate(need(!is.null(input$selectedCountry), "")) # catches UI warning
     
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
-      if (input$dataSelect == "Upload your own seed data") {
-        fileInput(
-          inputId = "seedData",
-          labelMandatory("Upload initial seed data (.csv or .xls or .xlsx)"),
-          accept = c(
-            "text/csv",
-            "text/comma-separated-values,text/plain",
-            ".csv",
-            ".xls",
-            ".xlsx"
-          )
+      # if (input$dataSelect == "Upload seed data") {
+      fileInput(
+        inputId = "seedData",
+        labelMandatory("Upload initial seed data (.csv or .xls or .xlsx)"),
+        accept = c(
+          "text/csv",
+          "text/comma-separated-values,text/plain",
+          ".csv",
+          ".xls",
+          ".xlsx"
         )
-      } else {
-        NULL
-      }
+      )
+      # } else {
+      #   NULL
+      # }
     }})
 
-  
-  seedData <- reactive({
-    if (input$dataSelect == "Use provided seed data") {
-      # Load the provided seed data (replace 'provided_seed_data.csv' with the actual file name)
-      read.csv("seeddata/KOR_initialSeedData2022-07-07 NEW.csv")
-    } else {
-      # If the user chooses to upload their own seed data, load the uploaded file
-      req(input$seedData)
-      read.csv(input$seedData$datapath)
-    }
-  })
   
   output$startDateInput <- renderUI({
     startDateInput <- Sys.Date() # NULL
@@ -1273,20 +1289,6 @@ server <- function(input, output, session){
     validate(need(!is.null(input$selectedCountry), "")) # catches UI warning
     
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
-      
-      # if(input$modelSelect == "SEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     startDateInput <- "2020-09-01" #filter(epiparms, ISONumeric == "CZE" & model == "SEIRD")[1,"startDate"]
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     startDateInput <- "2020-09-01" #filter(epiparms, ISONumeric == "NGA" & model == "SEIRD")[1,"startDate"]
-      #   }
-      # } else if (input$modelSelect == "SVEIRD"){
-      #   if (input$selectedCountry == "Czech Republic"){
-      #     startDateInput <- "2021-09-01" #filter(epiparms, ISONumeric == "CZE" & model == "SVEIRD")[1,"startDate"]
-      #   } else if (input$selectedCountry == "Nigeria"){
-      #     startDateInput <- "2021-09-01" #filter(epiparms, ISONumeric == "NGA" & model == "SVEIRD")[1,"startDate"]
-      #   }
-      # }
       
       dateInput('date', "Choose simulation start date:", value = startDateInput, max = Sys.Date(),
                 format = "yyyy-mm-dd", startview = "month", weekstart = 0,
@@ -1303,7 +1305,7 @@ server <- function(input, output, session){
                    min = 1, max = 3650, value = 3, step = 1)
     }
   })
-
+  
   output$outputVideo <- renderUI({
     tags$video(
       id = "video", 
@@ -1328,20 +1330,11 @@ server <- function(input, output, session){
     }
     
   })
-
+  
   observeEvent(input$go, {
     
     isCropped <- FALSE
-    
-    if(input$clipLev1 == TRUE)
-    {
-      isCropped <- TRUE
-    }
-    else
-    {
-      isCropped <- FALSE
-    }
-    
+
     print(paste0(c("isCropped", isCropped)))
     
     source("R/rasterStack.R")
@@ -1417,7 +1410,7 @@ server <- function(input, output, session){
   observe({
     updatePickerInput(session, inputId = 'selectedCountry', choices = c("South Korea"), selected = "South Korea")
   })
-
+  
   observeEvent(input$resetAll,{
     hideTab(inputId = 'tabSet', target = 'Input Summary')
   })
@@ -1429,7 +1422,7 @@ server <- function(input, output, session){
   observeEvent(input$go,{
     showTab(inputId = 'tabSet', target = 'Input Summary')
   })
-
+  
   observe(
     hideTab(inputId = 'tabSet', target = 'Mathematical Model')
   )
