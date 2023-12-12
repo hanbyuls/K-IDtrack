@@ -26,13 +26,18 @@ Seoul National University,
 Gwanak_1 Gwanak-ro, Gwanak-gu
 Seoul, Korea 08826
 
-Hanbyul Song, Gyulhee Han, Catherine Apio, Jiwon Park and Zhe Liu
+Ashok Krishnamurthy, PhD
+Associate Professor, Department of Mathematics and Computing, 
+Mount Royal University, 
+4825 Mount Royal Gate SW Calgary, 
+Alberta, Canada
+
+Hanbyul Song, Gyulhee Han, Taewan Gu, Jiwon Park and Zhe Liu
 Graduate Student, Seoul National University, Seoul, Korea 08826
 
 
 ## Acknowledgement
 
-Dr. Ashok Krishnamurthy
 
 
 ## Contact
