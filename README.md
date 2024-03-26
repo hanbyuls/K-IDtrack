@@ -5,9 +5,9 @@ This github page provides the code and data for the K-InfectDisTrack: COVID dash
 The data is sourced from the Korean Centers for Disease Control and Prevention (KCDC).
 
 
-## K-CovidTrack dashboard
+## K-InfectDisTrack:COVID dashboard
 
-Follow [this](https://covidtrack.shinyapps.io/kcovidtrack/) link for the interactive Shiny app. 
+Follow [this](https://infectdistrack.shinyapps.io/kinfectdistrack/) link for the interactive Shiny app. 
 
 
 ## Code explanation
