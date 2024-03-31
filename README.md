@@ -1,11 +1,11 @@
 ## Interactive web-based dashboard for analyzing geographical and temporal spread of COVID-19 in South Korea
 
-This github page provides the code and data for the K-InfectDisTrack: COVID dashboard. It contains information about the spread of COVID-19 in South Korea. 
+This github page provides the code and data for the K-IDtrack: COVID dashboard. It contains information about the spread of COVID-19 in South Korea. 
 
 The data is sourced from the Korean Centers for Disease Control and Prevention (KCDC).
 
 
-## K-InfectDisTrack:COVID dashboard
+## K-IDtrack:COVID dashboard
 
 Follow [this](https://infectdistrack.shinyapps.io/kinfectdistrack/) link for the interactive Shiny app. 
 
