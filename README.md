@@ -2,7 +2,7 @@
 
 This github page provides the code and data for the K-IDtrack: COVID dashboard. It contains information about the spread of COVID-19 in South Korea. 
 
-The data is sourced from the Korean Centers for Disease Control and Prevention (KCDC).
+The data is sourced from theKorea Disease Control and Prevention Agency (KDCA).
 
 
 ## K-IDtrack:COVID dashboard
