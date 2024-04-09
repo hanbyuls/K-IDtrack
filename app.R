@@ -1,11 +1,14 @@
 # rm(list = ls()); gc()
 
+#install.packages("C:/test/k-track-covid/maptools_1.1-8.tar.gz")
+#library(maptools)
 options(conflicts.policy = list(warn = FALSE))
 shhh <- suppressPackageStartupMessages # It's a library, so shhh!
 shhh(library(av))
 shhh(library(bslib))
 shhh(library(cptcity))
 shhh(library(countrycode))
+shhh(library(plyr))
 shhh(library(dplyr))
 shhh(library(ggplot2))
 shhh(library(lattice))
@@ -32,7 +35,7 @@ shhh(library(terra, warn.conflicts=FALSE))  # suppressWarnings(suppressMessages(
 shhh(library(tinytex))
 shhh(library(shinythemes))
 shhh(library(readxl))
-shhh(library(dplyr))
+# shhh(library(dplyr))
 shhh(library(leaflet))
 shhh(library(leaflet.extras))
 shhh(library(htmltools))
@@ -41,182 +44,15 @@ shhh(library(plotly))
 shhh(library(shinydashboard))
 shhh(library(DT))
 shhh(library(zoo))
+shhh(library(shinybusy))
 shhh((library(lubridate)))
 shhh((library(rsconnect)))
+shhh((library(HatchedPolygons)))
+shhh((library(shinyRatings)))
+shhh((library(ShinyRating)))
+shhh((library(bslib)))
 
-
-############### Load data ###############
-
-# setwd("C:/Users/ron18/Desktop/2022-1/bibs/covid19/kcovidtrack")
-# data_korea <- read.csv("Korea viz/data/data_korea.csv")
-region_population <- read_excel("Korea viz/data/region_population.xlsx")
-population <- read_excel("misc/population.xlsx", 1) #?
-full_region_df <- read.csv("Korea viz/data/region_data_08_31.csv")
-
-# Read data for map
-# worldcountry = geojsonio::geojson_read("Korea viz/data/input_data/50m.geojson", what = "sp")
-south_korea <- sf::st_read("Korea viz/data/south-korea-with-regions_1516.geojson") #region lon,lat
-region_match <- read.csv("Korea viz/data/region_match.csv") # english/korean name
-
-# setwd("C:/Users/ron18/Desktop/2022-1/bibs/covid19/kcovidtrack/")
-
-############ data processing ###############
-
-# select a month from region population
-colnames(region_population)[1] <- 'region'
-colnames(region_population)[2] <- 'population'
-region_population <- subset(region_population, !(region %in% c("행정구역(시군구)별", "전국")))
-region_population <- region_population[,1:2]
-region_population$region <- region_match$eng[match(region_population$region, region_match$kor)]
-
-# Remove total and lazaretto in region_df
-full_region_df <- subset(full_region_df, !(region %in% c("Total", "Lazaretto")))
-
-# Find indices of zero values in cum_deaths
-zero_indices <- which(full_region_df$cum_deaths == 0)
-# Find indices of zero values in cum_cases
-zero_indices_cum_cases <- which(full_region_df$cum_cases == 0)
-# Find indices of zero values in daily_cases
-zero_indices_daily_case <- which(full_region_df$daily_cases == 0)
-
-
-# Keep the row with the highest 'cum_cases' for each region and date
-full_region_df <- full_region_df %>%
-  group_by(region, date) %>%
-  # Assuming 'cum_cases' can serve as a proxy for the latest data
-  slice(which.max(cum_cases)) %>%
-  ungroup()
-
-full_region_df <- full_region_df %>%
-  arrange(region, date) %>%
-  group_by(region) %>%
-  mutate(
-    cum_cases = ifelse(cum_cases < lag(cum_cases, default = first(cum_cases)), lag(cum_cases), cum_cases)
-  ) %>%
-  ungroup()
-
-
-# remove the row with "*" in the df
-full_region_df <- full_region_df %>%
-  mutate(
-    per_100k = ifelse(grepl("\\*", per_100k), gsub("\\*", "", per_100k), per_100k),
-    per_100k = as.numeric(per_100k)
-  )
-
-# First, make sure that 'cum_cases' and 'per_100k' are numeric
-full_region_df <- full_region_df %>%
-  mutate(
-    cum_cases = as.numeric(cum_cases),
-    per_100k = as.numeric(per_100k)
-  )
-
-# table(is.na(full_region_df))
-
-# # Fix the 'cum_cases' and 'per_100k' by multiplying by 10 for those specific rows
-# full_region_df <- full_region_df %>%
-#   mutate(
-#     cum_cases = if_else(original_row_index %in% anomalies_index$original_row_index, cum_cases * 10, cum_cases),
-#     per_100k = if_else(original_row_index %in% anomalies_index$original_row_index, per_100k * 10, per_100k)
-#   )
-
-
-# Define a function to detect and correct anomalies
-correct_cum_deaths <- function(df) {
-  repeat {
-    # Add a row index to the data frame for reference
-    df <- df %>%
-      mutate(original_row_index = row_number())
-    
-    # Calculate the previous day's cumulative deaths for each region
-    df <- df %>%
-      group_by(region) %>%
-      arrange(region, date) %>%
-      mutate(prev_cum_deaths = lag(cum_deaths)) %>%
-      ungroup()
-    
-    # Detect anomalies
-    anomalies <- df %>%
-      filter(cum_deaths < prev_cum_deaths) %>%
-      select(original_row_index, region, date, cum_deaths, prev_cum_deaths)
-    
-    # Break the loop if there are no more anomalies
-    if (nrow(anomalies) == 0) {
-      break
-    }
-    
-    # Correct anomalies
-    df <- df %>%
-      mutate(
-        cum_deaths = if_else(original_row_index %in% anomalies$original_row_index, prev_cum_deaths, cum_deaths)
-      ) %>%
-      select(-prev_cum_deaths, -original_row_index) # Clean up
-  }
-  
-  return(df)
-}
-
-# Apply the correction function to your full_region_df
-full_region_df <- correct_cum_deaths(full_region_df)
-
-
-
-full_region_df <- full_region_df %>%
-  group_by(region) %>%
-  arrange(region, date) %>%
-  mutate(
-    prev_cum_cases = lag(cum_cases, order_by = date),
-    calculated_daily_cases = cum_cases - ifelse(is.na(prev_cum_cases), 0, prev_cum_cases),
-    daily_cases_correct = if_else(is.na(prev_cum_cases), daily_cases, calculated_daily_cases),
-    # Flag rows where daily_cases does not match the calculated daily cases
-    incorrect_daily_cases = daily_cases != calculated_daily_cases
-  ) %>%
-  ungroup()
-
-incorrect_indices <- which(full_region_df$incorrect_daily_cases)
-
-# Correct the daily_cases values
-full_region_df <- full_region_df %>%
-  mutate(
-    daily_cases = if_else(incorrect_daily_cases, calculated_daily_cases, daily_cases)
-  ) %>%
-  select(-c(prev_cum_cases, calculated_daily_cases, incorrect_daily_cases, daily_cases_correct)) # Clean up helper columns
-
-# Add daily deaths to the full_region_df
-full_region_df <- full_region_df %>%
-  group_by(region) %>%
-  arrange(region, date) %>%
-  mutate(
-    prev_cum_deaths = lag(cum_deaths, order_by = date),  # Get the previous day's cumulative deaths
-    daily_deaths = cum_deaths - ifelse(is.na(prev_cum_deaths), 0, prev_cum_deaths)  # Calculate the daily deaths
-  ) %>%
-  ungroup() %>%
-  select(-prev_cum_deaths)
-
-#remove first row of df from each region
-full_region_df <- full_region_df %>%
-  filter(date != "2020-01-20")
-
-# match region names Eng/Kor
-south_korea_ch <- south_korea
-south_korea_ch$name <- region_match$eng[match(south_korea_ch$name, region_match$kor)]
-
-# Merge COVID-19 data with South Korea polygon data
-# merged_data <- merge(south_korea_ch, region_df, by.x = "name", by.y = "region", all.x = TRUE)
-full_merged_data <- merge(south_korea_ch, full_region_df, by.x = "name", by.y = "region", all.x = TRUE)
-full_merged_data <- merge(full_merged_data, region_population, by.x = "name", by.y = "region", all.x = TRUE)
-
-# Convert date column to Date class
-full_merged_data$date <- as.Date(full_merged_data$date)
-
-# Check for non-numeric values in the date column
-non_numeric_dates <- full_merged_data[!is.na(as.numeric(full_merged_data$date)), ]
-
-# Remove rows with non-numeric dates
-full_merged_data <- full_merged_data[!is.na(as.numeric(full_merged_data$date)), ]
-
-# table(is.na(full_merged_data))
-
-
+####################################################################################
 
 # For plot selection
 plot_name_list_single <- c("bar" = "Bar plot", 
@@ -227,51 +63,36 @@ plot_name_list_multi <- c("bar" = "Stacked bar plot",
                           "line" = "Line plot",
                           "area" = "Stacked area plot")
 
-# Total regions
-region_list <- full_merged_data$name %>% unique
+
+
+population <- read_excel("misc/population.xlsx", 1) 
+
+# socio-demographic data
+load("Korea viz/data/full_merged_sociodemo_df.rdata")
+
+# covid-19 cases and deaths
+load("Korea viz/data/full_merged_data.rdata")
+
+# source year of socio-demographic data
+load("Korea viz/data/full_merged_sociodemo_year.rdata")
+
+
+full_merged_sociodemo_df <- full_merged_sociodemo_df %>% as.data.frame() %>% select(-geometry)
+full_merged_sociodemo_year <- full_merged_sociodemo_year %>% as.data.frame() %>% select(-geometry)
+
+gc()
+
+south_korea <- sf::st_read("Korea viz/data/south-korea-with-regions_1516.geojson") #region lon,lat
+region_match <- read.csv("Korea viz/data/region_match.csv") # english/korean name
+south_korea_ch <- south_korea
+south_korea_ch$name <- region_match$eng[match(south_korea_ch$name, region_match$kor)]
+
 
 # Set min_date and max_date
 min_date <- min(full_merged_data$date)
 max_date <- max(full_merged_data$date)
 
-# Create total cases & proportional cases
-full_merged_data <- full_merged_data %>%
-  group_by(date) %>%
-  mutate(total_cases = sum(daily_cases))
-full_merged_data <- full_merged_data %>%
-  mutate(prop_cases = round(daily_cases / total_cases, 4))
-
-# Create total deaths & proportional deaths
-full_merged_data <- full_merged_data %>%
-  group_by(date) %>%
-  mutate(total_deaths = sum(daily_deaths))
-full_merged_data <- full_merged_data %>%
-  mutate(prop_deaths = round(daily_deaths / total_deaths, 4))
-
-# Create a column for the month
-full_merged_data$month <- month(full_merged_data$date)
-
-# Calculate the average number of cases by month and region(name)
-full_merged_data <- full_merged_data %>%
-  group_by(name, month) %>%
-  mutate(avg_monthly_cases = round(mean(daily_cases), 0))
-
-# Calculate the average number of cases by regions
-full_merged_data$population <- as.numeric(full_merged_data$population)
-full_merged_data <- full_merged_data %>%
-  mutate(region_cases = round(daily_cases / population, 4))
-
-# Calculate the average number of deaths by month and region(name)
-full_merged_data <- full_merged_data %>%
-  group_by(name, month) %>%
-  mutate(avg_monthly_deaths = round(mean(daily_deaths), 0))
-
-# Calculate the average number of deaths by regions
-full_merged_data <- full_merged_data %>%
-  mutate(region_deaths = round(daily_deaths / population, 4))
-
-# Remove duplicates
-full_merged_data <- unique(full_merged_data)
+region_names <- full_merged_data$name %>% unique %>% sort
 
 ############ color palette ###############
 
@@ -282,22 +103,28 @@ cv_pal_c_montly <- colorBin("RdYlGn", domain = full_merged_data$region_cases, bi
 cv_pal_d_montly <- colorBin("RdYlGn", domain = full_merged_data$region_deaths, bins = c(0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.1, 0.2, 0.3, 0.4, 1), reverse = TRUE)
 cv_pal_c_daily <- colorBin("RdYlGn", domain = full_merged_data$daily_cases, bins = c(0, 100, 500, 1000, 1500, 2000, Inf), reverse = TRUE)
 cv_pal_d_daily <- colorBin("RdYlGn", domain = full_merged_data$daily_deaths, bins = c(0, 5, 10, 20, 50, 100, Inf), reverse = TRUE)
-cv_pal_c_avg_daily <- colorBin("RdYlGn", domain = full_merged_data$avg_monthly_cases, bins = c(0, 100, 500, 1000, 1500, 2000, Inf), reverse = TRUE)
-cv_pal_d_avg_daily <- colorBin("RdYlGn", domain = full_merged_data$avg_monthly_deaths, bins = c(0, 10, 50, 100, 150, 200, Inf), reverse = TRUE)
+cv_pal_c_daily_100k <- colorBin("RdYlGn", domain = full_merged_data$per_100k_cases, bins = c(0, 5, 10, 50, 100, 500, Inf), reverse = TRUE)
+cv_pal_d_daily_100k <- colorBin("RdYlGn", domain = full_merged_data$per_100k_deaths, bins = c(0, 0.01, 0.02, 0.03, 0.04, 0.05, Inf), reverse = TRUE)
 
-############ centroids ###############
 
-# Calculate centroids of the polygons
-suppressWarnings({
-  centroids2 <- st_centroid(full_merged_data)
-  centroid_coords2 <- st_coordinates(centroids2$geometry)
-  
-  # Adjust the coordinates for Gyeonggi-do
-  gyeonggi_coords2 <- centroid_coords2[full_merged_data$name == "Gyeonggi-do", ]
-  gyeonggi_coords2[2] <- gyeonggi_coords2[2] + 0.3  # Adjust the latitude
-  centroid_coords2[full_merged_data$name == "Gyeonggi-do", ] <- gyeonggi_coords2
-})
+names(full_merged_data)
+names(full_merged_sociodemo_df)
 
+
+cv_pal_so_male<- colorBin("RdYlGn", domain = full_merged_sociodemo_df$male, bins = c(0, 50000, 100000, 150000, 200000, 250000, 300000, 400000, 500000, Inf), reverse = TRUE)
+cv_pal_so_female <- colorBin("RdYlGn", domain = full_merged_sociodemo_df$female, bins = c(0, 50000, 100000, 150000, 200000, 250000, 300000, 400000, 500000, Inf), reverse = TRUE)
+cv_pal_so_seniors_per_1k <- colorBin("RdYlGn", domain = full_merged_sociodemo_df$seniors_per_1k, bins = c(0, 5, 10, 15, 20, 25, 30), reverse = TRUE)
+cv_pal_so_foreigners_per_1k <- colorBin("RdYlGn", domain = full_merged_sociodemo_df$foreigners_per_1k, bins = c(0, 5, 10, 15, 20, 25, 30, 35), reverse = TRUE)
+cv_pal_so_smoking_rate <- colorBin("RdYlGn", domain = full_merged_sociodemo_df$smoking_rate, bins = c(0, 5, 10, 15, 20, 25), reverse = TRUE)
+cv_pal_so_bed <- colorBin("RdYlGn", domain = full_merged_sociodemo_df$beds_per_1k, bins = c(0, 5, 10, 15, 20, 25, 30), reverse = TRUE)
+cv_pal_so_doctors_per_1k <- colorBin("RdYlGn", domain = full_merged_sociodemo_df$doctors_per_1k, bins = 0:6, reverse = TRUE)
+cv_pal_so_income <- colorBin("RdYlGn", domain = full_merged_sociodemo_df$income, bins = c(0, 5000, 10000, 15000, 20000, 25000, 30000), reverse = TRUE)
+
+
+gc()
+
+full_merged_data <- full_merged_data %>% as.data.frame() %>% select(-geometry)
+gc()
 
 fieldsMandatory <- c("selectedCountry", "seedData")
 
@@ -315,6 +142,8 @@ highlightDrop <- function(menu) {
   )
 }
 
+gc()
+
 appCSS <- ".mandatory_star {color: red;}"
 appCSS <- ".invisible {display:none;}"
 appCSS <- ".dropDown:hover {color:ADD8E6;background-color: #000000}"
@@ -330,10 +159,52 @@ ui <- bootstrapPage(
     includeHTML("Korea viz/data/gtag.html"),
     includeCSS("Korea viz/data/custom_styles.css"),
     tags$style(HTML("
+      .jumbotron {
+        position: relative; /* 상대적 위치 설정 */
+      }
+      
+      #floating-buttons {
+        position: absolute; /* 절대적 위치 설정 */
+        bottom: 20px; /* jumbotron 하단에서 20px 위 */
+        right: 20px; /* jumbotron 우측에서 20px 왼쪽 */
+      }
+      
+      .floating-btn {
+        display: inline-block; /* 버튼을 가로로 배열 */
+        margin-right: 10px; /* 오른쪽 버튼과의 간격 */
+        padding: 5px 15px; /* 버튼 내부 여백 */
+        background-color: white; /* 배경색 */
+        color: #286090; /* 글자색 */
+        border-radius: 8px; /* 둥근 모서리 */
+        text-decoration: none; /* 밑줄 없음 */
+        border: 1px solid #546cc2; /* 테두리 색상 */
+        transition: background-color 0.3s, border-color 0.3s; /* 색상 변화 애니메이션 */
+        text-align: center; /* 텍스트 가운데 정렬 */
+      }
+      .floating-btn:hover, .floating-btn:active, .floating-btn:focus {
+        background-color: #286090; /* 호버 시 배경색 */
+        color: white; /* 호버 시 글자색 */
+        border-color: #286090; /* 호버 시 테두리색 */
+        text-decoration: none !important; /* 강제로 밑줄 없애기 */
+        outline: none !important; /* 클릭 시 나타나는 외곽선 제거 */
+      }
+      .navbar { /* Bootstrap 3의 기본 navbar */
+        background-color: #27293E !important; /* 새 배경색 */
+        border-color: #27293E !important; /* 테두리 색상 일치 */
+      }
       .navbar-default .navbar-nav > li > a {
         padding-top: 15px;
         padding-bottom: 15px;
+        
       }
+      .navbar-brand img { margin-left: 15px; margin-top: -15px; margin-bottom: -15px; height: 100%; }
+      .navbar { min-height: 50px; }
+      .navbar .navbar-brand {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+    }
       .custom-tab1 > a {
         background-color: blue;
         color: white;
@@ -349,6 +220,17 @@ ui <- bootstrapPage(
       .leaflet-container {
         background-color: #FAFAFA;  
       }
+   
+      
+    ")),
+    tags$script(HTML("
+      $(document).ready(function() {
+        // Make the navbar brand (title) clickable, redirecting to the base URL or performing a custom action
+        $('.navbar-brand').click(function() {
+          // Example: Redirect to base URL, or you can modify this to show/hide content programmatically
+          window.location.href = 'https://k-track-covid.shinyapps.io/k-track-covid/';
+        });
+      });
     ")),
     tags$script("
     $(document).ready(function(){
@@ -363,14 +245,55 @@ ui <- bootstrapPage(
       Shiny.setInputValue('screen_height', h);
     });
   ")
+
   ),
+  add_busy_spinner(
+    spin = "half-circle",       # Changing to "cube-grid" for a different fancy effect. Choose any other from the library if desired.
+    color = "#112446",
+    timeout = 100,
+    position = "bottom-left",   # Using full-page to enable centering.
+    onstart = TRUE,
+    margins = c(350, 600),        # No margins to ensure proper centering.
+    height = "50px",
+    width = "50px"),
+
+  
   navbarPage(
     theme = shinytheme("cosmo"),
-    collapsible = TRUE,
-    HTML('<a style="text-decoration:none;cursor:default;color:#FFFFFF;" class="active" href="#">K-Covid Track</a>'), 
-    id="nav",
-    windowTitle = "K-Covid Track",
+    windowTitle = "K-Track-Covid",
     
+    # HTML 함수를 사용하여 메인 페이지 링크 대신 이미지로 타이틀을 설정
+    # 이미지를 클릭하면 지정된 웹페이지로 이동
+    title = HTML('<div class="navbar-brand" style="padding: 0;"><img src="k-track-covid.png" style="width: 300px; height: 51px;"></div>'),
+    #title = HTML('<a class="navbar-brand" href="https://github.com/hanbyuls/K-Track-Covid" target="_blank"><img src="k-track-covid.png" height="50"></a>'),
+    id="nav",
+    collapsible = TRUE,
+    # Define the Main Page tab with ID 'main'.
+    tabPanel("Main Page", id="main",
+             div(class = "container",
+                 tags$div(class = "jumbotron", 
+                          tags$h2("Welcome to", style = "color: #337ab7; font-weight: bold; font-size: 30px;"), # Adjusted font size for the 'Welcome' message
+                          tags$h1("K-Track-Covid dashboard", style = "font-weight: bold; font-size: 44px;"), # Adjusted font size for the dashboard title
+                          tags$br(),
+                          tags$p("The K-Track-Covid is an interactive web-based dashboard developed using the R Shiny framework, to offer users an intuitive dashboard for analyzing the geographical and temporal spread of COVID-19 in South Korea.", style="font-size: 24px;"), # Adjusted font size for paragraph text
+                          tags$p("The dashboard is designed to assist researchers, policymakers, and the public in understanding the spread and impact of COVID-19, thereby facilitating informed decision-making. ", style="font-size: 24px;"),
+                          tags$br(),
+                          
+                          tags$h3("Featured Sections:", style="font-weight: bold;font-size: 28px;"), # Adjusted font size for the 'Featured Sections' header
+                          tags$ul(
+                            tags$li("Map Tab: Explore an interactive map detailing COVID-19 cases and trends across different regions.", style="font-size: 24px;"),
+                            tags$li("Regional Trend Tab: Delve into time-series visualizations of COVID-19 metrics for individual regions.", style="font-size: 24px;"),
+                            tags$li("Simulation Tab: Utilize advanced mathematical models to simulate various COVID-19 scenarios.", style="font-size: 24px;")
+                          ),
+                          tags$br(),
+                          div(id="floating-buttons",
+                              a(href="http://statgen.snu.ac.kr/software/user-manual/KTrack-Covid.pdf", target="_blank", class="floating-btn", "Manual"),
+                              a(href="https://forms.gle/7w3sLqLFmM8NdfXX8", target="_blank", class="floating-btn", "Feedback")
+                              
+                          )
+                 )
+             )
+    ),
     tabPanel(
       "Map",
       div(
@@ -379,14 +302,28 @@ ui <- bootstrapPage(
         leafletOutput("mymap", width="100%", height="100%"),
         
         absolutePanel(id = "controls", class = "panel panel-default",
-                      top = 100, left = 55, width = 350, fixed=TRUE,
-                      draggable = TRUE, height = 500, 
+                      top = 100, left = 55, width = 450, fixed=TRUE,
+                      draggable = TRUE, height = 950, 
                       style = "background-color: #f5f5f7; border-radius: 10px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); padding: 15px; opacity: 0.95;",
+                      
+                      
                       
                       tabsetPanel(id = "tabs",
                                   tabPanel("Map",
                                            class = "custom-tab1",
-                                           h6("Please select a date to visualize:", style = "font-size: 18px;"),  # Increase font-size to 18px
+                                           
+                                           div(
+                                             style = "display: inline-block; vertical-align: middle;",
+                                             h6("Please select a date to visualize", style = "display: inline-block; font-size: 18px; margin-right: 5px;"),
+                                             circleButton("show_map", icon = icon("question"), size = "xs", 
+                                                          style = "display: inline-block; vertical-align: middle;")
+                                             # actionButton("my_button", "Click Me", 
+                                             #              style = "display: inline-block; vertical-align: middle;")
+                                           ),
+                                           #circleButton("show_map", icon = icon("question"), size = "snm"),
+                                           
+                                           
+                                           #h6("Please select a date to visualize:", style = "font-size: 18px;"),  # Increase font-size to 18px
                                            
                                            sliderInput(
                                              "date_slider", "Date", 
@@ -397,29 +334,46 @@ ui <- bootstrapPage(
                                              width = "100%"  # Set width to 100%
                                            ),
                                            
-                                           h6("Select the overlay group to visualize.", style = "font-size: 16px;"),  # Increase font-size to 18px
+                                           ############ 추가 ############
                                            
-                                           selectInput(
-                                             "overlayGroup", "Select Overlay Group",
-                                             choices = c("daily_cases", "daily_cases (proportion)", "daily_deaths", "daily_deaths (proportion)"),
-                                             width = "100%"  # Set width to 100%
+                                           radioButtons("dataChoice", "Choose Data to Visualize:",
+                                                        choices = list("COVID-19 cases and deaths" = "1", "Socio-demographic variables" = "2", "Both" = "both"),
+                                                        selected = "1"),
+                                           h6("Select the overlay group to visualize.", style = "font-size: 16px;"),  # Increase font-size to 18px
+                                           conditionalPanel(
+                                             condition = "input.dataChoice == '1' || input.dataChoice == 'both'",
+                                             uiOutput("varSelectUI1"),
+                                             checkboxInput("showHighRisk1", "Show high risk zone for COVID-19 data", FALSE, width = "90%"),
+                                             uiOutput("thresholdSlider1")
+                                           ),
+                                           conditionalPanel(
+                                             condition = "input.dataChoice == '2' || input.dataChoice == 'both'",
+                                             uiOutput("varSelectUI2"),
+                                             checkboxInput("showHighRisk2", "Show high risk for Socio-demographic data", FALSE, width = "90%"),
+                                             uiOutput("highval_risk"),
+                                             uiOutput("thresholdSlider2")
+                                           ),
+                                           conditionalPanel(
+                                             condition = "input.dataChoice == 'both'",
+                                             selectInput("mainData", "Select Main Data:",
+                                                         choices = c("COVID-19 cases and deaths" = "1", "Socio-demographic variables" = "2"),
+                                                         selected = "1", width = "90%")
                                            ),
                                            
-                                           h6("daily_cases (proportion): daily cases by region / total daily cases", style = "font-size: 14px;"),  # Increase font-size to 16px
-                                           h6("daily_deaths (proportion): daily deaths by region / total daily deaths", style = "font-size: 14px;")
                                   )
+                                  
                       )
         )
       )
     ),
     
-    tabPanel("Region plots",
+    tabPanel("Regional Trend",
              sidebarLayout(
                sidebarPanel(
                  span(tags$i(h6("Select the region and the outcome variable")), style="color:#045a8d"),
                  
                  pickerInput("region_select", "Region:",   
-                             choices <- south_korea_ch$name, 
+                             choices <- region_names, 
                              selected = c("Seoul"),
                              multiple = TRUE),
                  
@@ -432,34 +386,41 @@ ui <- bootstrapPage(
                  selectInput("p_type_input", "Select Plot Type:", 
                              choices = c("area", "line", "bar"), 
                              selected = "area"),
+                 
+                 
                ),
                
                mainPanel(
                  tabsetPanel(
                    tabPanel("Raw", plotlyOutput("region_plot_raw"))
-                   # ,
-                   # tabPanel("Smoothed", plotlyOutput("region_plot_smoothed"))
                  )
                )
              )
     ),
+    
+    
     tabPanel(
       title = "Simulation",
+      actionButton("show_simulation", "Details"),
       sidebarLayout(
         sidebarPanel(
           shinyjs::useShinyjs(),
           shinyjs::inlineCSS(appCSS),
           div(
             id = "dashboard",
-
+            
+            
             textInput("selectedCountry", "Selected Country", value = "South Korea"),
-
+            
             hidden(
               checkboxInput(inputId = "filterLMIC", label = strong("Show LMIC only"), value = FALSE)
             ),
+            
             uiOutput("clipStateCheckbox"),
             
+            
             conditionalPanel(condition = "input.clipLev1 == '1'", uiOutput("Level1Ui")),
+            
             
             uiOutput("aggInput"),
             
@@ -495,18 +456,28 @@ ui <- bootstrapPage(
               
               downloadButton("downloadSeedData", "Download Sample Seed Data"),
               
+              
+              radioButtons("dataSelect", "Seed data:",
+                           choices = list("Use provided seed data" = "default",
+                                          "Upload your own seed data" = "upload"),
+                           selected = "default",
+                           inline = FALSE),
+              
+              
+              
               uiOutput("seedUpload"),
+              
+              uiOutput("fileInputUI"),
               
               uiOutput("startDateInput"),
               
               uiOutput("timestepInput")
             ),
             
-            actionButton(
-              "go",
-              "Run Simulation",
-              style = "color: #fff; background-color: #337ab7; border-color: #2e6da4"
-            ),
+            
+            actionButton("go", "Run Simulation",
+                         style = "color: #fff; background-color: #337ab7; border-color: #2e6da4", disabled = TRUE),
+
             actionButton(
               "resetAll",
               "Reset Values",
@@ -524,7 +495,9 @@ ui <- bootstrapPage(
               verbatimTextOutput("summary"),
               tableOutput("table"),
               imageOutput("outputImage"),
-              imageOutput("croppedOutputImage"),
+              imageOutput("croppedOutputImage")
+              #imageOutput("seededOutputImage"),
+              #downloadButton(outputId = "downloadSummary", label = "Save Input Summary as a PDF File")
             ),
             
             tabPanel(
@@ -550,14 +523,15 @@ ui <- bootstrapPage(
               title = "MP4 Animation",
               id = "mp4Tab",
               icon = icon("film"),
-              uiOutput("outputVideo"),
-              downloadButton(outputId = "downloadMP4", label = "Save MP4 Animation")
+              uiOutput("outputVideo")#,
+              #downloadButton(outputId = "downloadMP4", label = "Save MP4 Animation")
             ),
             
             tabPanel(
               title = "Output Summary",
               icon = icon("table"),
-              dataTableOutput("outputSummary")
+              dataTableOutput("outputSummary"),
+              downloadButton(outputId = "downloadOutputSummary", label = "Save Output Summary")
             ),
             
             tabPanel(
@@ -579,8 +553,8 @@ ui <- bootstrapPage(
              tags$div(
                tags$h4("Last update"), 
                # h6(paste0(max_date)),2023-05-27
-               h6(paste0("2023-11-06")),
-               
+               h6(paste0("2024-04-04")),
+              
                "This site provides information about the spread of COVID-19 in South Korea. The data is sourced from the Korean Centers for Disease Control and Prevention (KCDC).", tags$br(),
                "Please be advised that, following the reclassification of COVID-19 as a Class 4 infectious disease by the KCDC, the regular updates to the provincial incidence data have been discontinued as of September 1, 2023.", tags$br(),tags$br(),
                
@@ -591,12 +565,11 @@ ui <- bootstrapPage(
                "Please carefully consider the parameters you choose. Interpret and use the simulated results responsibly.",tags$br(),
                "Authors are not liable for any direct or indirect consequences of this usage.", tags$br(),tags$br(),
                
-               
-               
+
                tags$br(),tags$br(),tags$h4(tags$b("Code")),
-               "Code and input data used to generate this Shiny mapping tool are available on ",tags$a(href="https://github.com/ron1891/K-CovidTrack", "Github."),
+               "Code and input data used to generate this Shiny mapping tool are available on ",tags$a(href="https://github.com/hanbyuls/K-Track-Covid", "Github."),
                tags$br(),tags$br(),tags$h4(tags$b("Sources")),
-               "COVID-19 cases: ", tags$a(href="https://www.data.go.kr/en/index.do", "Public Data Portal,")," with additional information from the ",tags$a(href="https://ncov.kdca.go.kr/en/", "Central Disease Control Headquarters of South Korea."),
+               "COVID-19 cases: ", tags$a(href="https://www.data.go.kr/en/index.do", "Public Data Portal,")," with additional information from the ",tags$a(href="https://www.kdca.go.kr/index.es?sid=a3", "Central Disease Control Headquarters of South Korea."),
                
                
                tags$br(),tags$br(),tags$h4(tags$b("Research Team")),
@@ -621,7 +594,7 @@ ui <- bootstrapPage(
                "tspark@stats.snu.ac.kr",tags$br(),
                "byul1891@gmail.com",tags$br(),
                "http://bibs.snu.ac.kr/",tags$br(),tags$br(),
-               tags$img(src = "bibs.png", width = "275px", height = "75px")
+               tags$img(src = "bibs.png", width = "116px", height = "50px")
                
                
              )
@@ -635,12 +608,100 @@ ui <- bootstrapPage(
 
 ############################ Server Component ############################
 
+# resp_only, demo_only, both 
+plot_options <- "resp_only"
+main_plot_option <- "no"
 
-# setwd("C:/Users/ron18/Desktop/2022-1/bibs/mathematical model/R code-20230112T042318Z-001/R code")
+covid_var_names <- list("daily_cases" = "daily_cases", "daily_cases (proportion)"= "prop_cases", "daily_cases (per 100K)" = "per_100k_cases", 
+                        "daily_deaths"= "daily_deaths", "daily_deaths (proportion)" = "prop_deaths", "daily_deaths (per 100K)" = "per_100k_deaths")
+
+# <15, 15–24, 25–49, 50–64, 65–79, and 80+ years
+socio_var_names <- list("Population - males" = "male", "Population - females"= "female", 
+                        # "Population - age < 25" = "age_0_24",
+                        # "Population - age 25~64" = "age_25_64",
+                        # "Population - age > 64" = "age_65+",
+                        "Population - seniors (per 1K)" = "seniors_per_1k",
+                        "Population - foreigners (per 1K)" = "foreigners_per_1k",
+                        "Comorbidity - smoking rate" = "smoking_rate",
+                        "Health - total beds (per 1K)" = "beds_per_1k",
+                        "Health - doctors (per 1K)" = "doctors_per_1k",
+                        "Economic - income (1,000 ￦)" = "income")
+
+high_default <-  list("male" = "high", 
+                      "female" = "high",
+                      "seniors_per_1k" = "high",
+                      "foreigners_per_1k" = "high",
+                      "smoking_rate" = "high",
+                      "beds_per_1k" = "low",
+                      "doctors_per_1k" = "low",
+                      "income" = "low")
 
 server <- function(input, output, session){
   
   ############ Map tab ############
+  
+  # 변수 선택 UI for COVID-19 data
+  output$varSelectUI1 <- renderUI({
+    if (input$dataChoice == "1" || input$dataChoice == "both") {
+      selectInput("overlayGroup", "Variable for COVID-19 data", choices = covid_var_names, selected = "daily_cases", width = "90%")
+    }
+  })
+
+  # 변수 선택 UI for Socio-demographic data
+  output$varSelectUI2 <- renderUI({
+    if (input$dataChoice == "2" || input$dataChoice == "both") {
+      selectInput("overlayGroup2", "Variable for Socio-demographic data", choices = socio_var_names, selected = "beds_per_1k", width = "90%")
+    }
+  })
+
+  # 임계값 슬라이더 UI for COVID-19 data
+  output$thresholdSlider1 <- renderUI({
+    if (input$showHighRisk1 && (input$dataChoice == "1" || input$dataChoice == "both")) {
+      
+      # case, deaths, cases/100k, deaths/100k
+      if(input$overlayGroup == "daily_cases"){
+        max_val <- 10000
+      }else if(input$overlayGroup == "daily_deaths"){
+        max_val <- 200
+      }
+      else if(input$overlayGroup == "per_100k_cases"){
+        max_val <- 1000
+      }else if(input$overlayGroup == "per_100k_deaths"){
+        max_val <- 0.5
+      }else{
+        max_val <- max(full_merged_data[[input$overlayGroup]], na.rm = TRUE)
+      }
+      
+      sliderInput("threshold1", "Threshold for COVID-19 data", min = min(full_merged_data[[input$overlayGroup]], na.rm = TRUE),
+                  max = max_val, value = mean(full_merged_data[[input$overlayGroup]], na.rm = TRUE), width = "100%" )
+      
+    }
+  })
+
+  # 임계값 슬라이더 UI for Socio-demographic data
+  output$thresholdSlider2 <- renderUI({
+    #print(input$overlayGroup2)
+    if (input$showHighRisk2 && (input$dataChoice == "2" || input$dataChoice == "both")) {
+      full_merged_sociodemo_df[[input$overlayGroup2]] <- as.numeric(full_merged_sociodemo_df[[input$overlayGroup2]])
+      sliderInput("threshold2", "Threshold for Socio-demographic data", min = min(full_merged_sociodemo_df[[input$overlayGroup2]], na.rm = TRUE),
+                  max = max(full_merged_sociodemo_df[[input$overlayGroup2]], na.rm = TRUE), value = mean(full_merged_sociodemo_df[[input$overlayGroup2]], na.rm = TRUE), width = "100%" )
+    }
+  })
+
+  output$highval_risk <- renderUI({
+    # print("here")
+    # print(is.na(input$showHighRisk2))
+    if(length(input$showHighRisk2) > 0){
+      if (input$showHighRisk2 && (input$dataChoice == "2" || input$dataChoice == "both")) {
+        selectInput("highval_risk", label = NULL, choices = list("High value means higher risk"="high", "High value means lower risk"="low"), 
+                    selected = high_default[[input$overlayGroup2]], width = "90%")
+      }
+    }
+    
+  })
+
+  
+  ################################################################################
   
   observe({
     
@@ -659,31 +720,124 @@ server <- function(input, output, session){
       zoom_level <- 5
     }
     
+    
+    
     output$mymap <- renderLeaflet({
       selected_date <- input$date_slider
       selected_date_range <- input$month_range
-      overlayGroup <- input$overlayGroup
-      filtered_data <- full_merged_data[full_merged_data$date == as.Date(selected_date), ]
+
       
       
-      if(as.character(overlayGroup) == 'daily_cases'){
-        overlayGroup <- 'daily_cases'
-        cv_pal <- cv_pal_c_daily
-        display_data <- "cases"
-      } else if (as.character(overlayGroup) == 'daily_cases (proportion)') {
-        overlayGroup <- 'prop_cases'
-        cv_pal <- cv_pal_c
-        display_data <- "cases"
-        filtered_data$prop_cases[is.na(filtered_data$prop_cases)] <- 0
-      } else if (as.character(overlayGroup) == 'daily_deaths') {
-        overlayGroup <- 'daily_deaths'
-        cv_pal <- cv_pal_d_daily
-        display_data <- "deaths"
-      } else if (as.character(overlayGroup) == 'daily_deaths (proportion)') {
-        overlayGroup <- 'prop_deaths'
-        cv_pal <- cv_pal_d  
-        display_data <- "deaths"
-        filtered_data$prop_deaths[is.na(filtered_data$prop_deaths)] <- 0
+      #selected_date <- "2022-01-01"
+      df_1 <- full_merged_data[full_merged_data$date == as.Date(selected_date), ] # resp
+      df_1 <- merge(south_korea_ch, df_1, by.x = "name", by.y = "name", all.x = TRUE)
+      
+      df_2 <- full_merged_sociodemo_df[full_merged_sociodemo_df$date == as.Date(selected_date), ] # sodemo
+      df_2 <- merge(south_korea_ch, df_2, by.x = "name", by.y = "name", all.x = TRUE)
+      
+      # print(object.size(df_1), 
+      #       quote = FALSE, units = "Mb", standard = "auto", digits = 1L)
+      
+      df_2_source <- full_merged_sociodemo_year[full_merged_sociodemo_year$date == as.Date(selected_date), ] # sodemo
+      
+      
+      
+      #print(input$mainData)
+      if(input$dataChoice =='1' | (input$dataChoice =='both' & input$mainData == '1')){ # + resp이 main
+        
+        
+        #overlayGroup <- "daily_cases"
+        overlayGroup <- input$overlayGroup
+        filtered_data <- df_1
+        #filtered_data2 <- [full_merged_data$date == as.Date(selected_date), ]
+        
+        if(as.character(overlayGroup) == 'daily_cases'){
+          overlayGroup <- 'daily_cases'
+          cv_pal <- cv_pal_c_daily
+          display_data <- "cases"
+        } else if (as.character(overlayGroup) == 'prop_cases') {
+          overlayGroup <- 'prop_cases'
+          cv_pal <- cv_pal_c
+          display_data <- "cases"
+          filtered_data$prop_cases[is.na(filtered_data$prop_cases)] <- 0
+        } else if (as.character(overlayGroup) == 'per_100k_cases') {
+          overlayGroup <- 'per_100k_cases'
+          cv_pal <- cv_pal_c_daily_100k
+          display_data <- "cases"
+        }else if (as.character(overlayGroup) == 'daily_deaths') {
+          overlayGroup <- 'daily_deaths'
+          cv_pal <- cv_pal_d_daily
+          display_data <- "deaths"
+        } else if (as.character(overlayGroup) == 'prop_deaths') {
+          overlayGroup <- 'prop_deaths'
+          cv_pal <- cv_pal_d  
+          display_data <- "deaths"
+          filtered_data$prop_deaths[is.na(filtered_data$prop_deaths)] <- 0
+        }else if (as.character(overlayGroup) == 'per_100k_deaths') {
+          overlayGroup <- 'per_100k_deaths'
+          cv_pal <- cv_pal_d_daily_100k  
+          display_data <- "deaths"
+          filtered_data$per_100k_deaths[is.na(filtered_data$per_100k_deaths)] <- 0
+        }
+        
+        
+      }else if(input$dataChoice =='2' | (input$dataChoice =='both' & input$mainData == '2')){
+        
+        overlayGroup <- input$overlayGroup2
+        #overlayGroup <- "beds_per_1k"
+        df_2[[overlayGroup]] <- as.numeric(df_2[[overlayGroup]])
+        filtered_data <- df_2
+        if(as.character(overlayGroup) == 'beds_per_1k'){
+          cv_pal <- cv_pal_so_bed
+          display_data <- "beds"
+        }else if(as.character(overlayGroup) == 'male'){
+          cv_pal <- cv_pal_so_male
+          display_data <- "male"
+        }else if(as.character(overlayGroup) == 'female'){
+          cv_pal <- cv_pal_so_female
+          display_data <- "female"
+        }else if(as.character(overlayGroup) == 'seniors_per_1k'){
+          cv_pal <- cv_pal_so_seniors_per_1k
+          display_data <- "seniors_per_1k"
+        }else if(as.character(overlayGroup) == 'foreigners_per_1k'){
+          cv_pal <- cv_pal_so_foreigners_per_1k
+          display_data <- "foreigners_per_1k"
+        }else if(as.character(overlayGroup) == 'smoking_rate'){
+          cv_pal <- cv_pal_so_smoking_rate
+          display_data <- "smoking_rate"
+        }else if(as.character(overlayGroup) == 'doctors_per_1k'){
+          cv_pal <- cv_pal_so_doctors_per_1k
+          display_data <- "doctors_per_1k"
+        }else if(as.character(overlayGroup) == 'income'){
+          cv_pal <- cv_pal_so_income
+          display_data <- "income"
+        }
+        
+        
+      }else{
+        print("error")
+      }
+      
+      if(input$showHighRisk1){
+        risk_1_idx <- which(df_1[[input$overlayGroup]] > input$threshold1)
+
+        #risk_1_idx <- which(df_1[["daily_cases"]] > 1000)
+        if(length(risk_1_idx)>0){
+          df_1_risk <- df_1[risk_1_idx,]
+        }
+      }
+      if(input$showHighRisk2){
+        df_2[[input$overlayGroup2]] <- as.numeric(df_2[[input$overlayGroup2]])
+        # print("here2")
+        # print(is.na(input$highval_risk))
+        if(input$highval_risk == "high"){
+          risk_2_idx <- which(df_2[[input$overlayGroup2]] > input$threshold2)
+        }else if(input$highval_risk == "low"){
+          risk_2_idx <- which(df_2[[input$overlayGroup2]] < input$threshold2)
+        }
+        if(length(risk_2_idx)>0){
+          df_2_risk <- df_2[risk_2_idx,]
+        }
       }
       
       # Define a reactive expression for labels
@@ -692,6 +846,7 @@ server <- function(input, output, session){
           return(filtered_data %>%
                    mutate(label_text = paste0("<strong>", name, "</strong><br>Daily cases: ", daily_cases,
                                               "<br>Daily case (proportion): ", round(prop_cases * 100, 2), '%',
+                                              "<br>Daily case (per 100K): ",  per_100k_cases,
                                               "<br>Cumulative cases: ", cum_cases)) %>%
                    .$label_text %>%
                    lapply(htmltools::HTML))
@@ -699,7 +854,16 @@ server <- function(input, output, session){
           return(filtered_data %>%
                    mutate(label_text = paste0("<strong>", name, "</strong><br>Daily deaths: ", daily_deaths,
                                               "<br>Daily death (proportion): ", round(prop_deaths * 100, 2), '%',
+                                              "<br>Daily death (per 100K): ",  per_100k_deaths,
                                               "<br>Cumulative deaths: ", cum_deaths)) %>%
+                   .$label_text %>%
+                   lapply(htmltools::HTML))
+        }else{
+          filtered_data$value <- filtered_data[[overlayGroup]]
+          filtered_data$source_year <- df_2_source[[overlayGroup]]
+          return(filtered_data %>%
+                   mutate(label_text = paste0("<strong>", name, "</strong><br>",display_data,": ", value,
+                                              "<br>*Source year: ", source_year)) %>%
                    .$label_text %>%
                    lapply(htmltools::HTML))
         }
@@ -709,6 +873,7 @@ server <- function(input, output, session){
                                                   minZoom = 7, maxZoom = 8, dragging = TRUE)) %>%
 
         hideGroup(c("2019-COVID (cumulative)", "Cumulative Deaths")) %>%
+        # addProviderTiles(providers$CartoDB.Positron) %>%
         setView(lng = 127.5, lat = 36.2, zoom = 7) %>%
         addPolygons(
           data = filtered_data,
@@ -735,12 +900,51 @@ server <- function(input, output, session){
                      lat1 = 36.2 + 3,
                      lng2 = 127.5 - 5,
                      lat2 = 36.2 - 3)
+      
+      if(input$dataChoice =='1' | input$dataChoice =='both'){
+
+        if(input$showHighRisk1){
+          if(length(risk_1_idx)>0){
+            
+            df_1_hatched <- hatched.SpatialPolygons(df_1_risk, density = c(8), angle = c(135))
+            
+            
+            basemap <- basemap %>%
+              addPolylines(
+                data = df_1_hatched,
+                color = c("black"),
+                weight = 1,
+                opacity = 1
+              )
+          }
+        }
+      }
+      
+      
+      if(input$dataChoice =='2' | input$dataChoice =='both'){
+
+        if(input$showHighRisk2){
+          if(length(risk_2_idx)>0){
+            
+            df_2_hatched <- hatched.SpatialPolygons(df_2_risk, density = c(8), angle = c(90))
+            
+            
+            basemap <- basemap %>%
+              addPolylines(
+                data = df_2_hatched,
+                color = c("black"),
+                weight = 1,
+                opacity = 1
+              )
+          }
+        }
+      }
+      
       basemap
       
     })
   })
-  
-  
+
   
   # Listen to overlayGroup and displayGroup
   observe({
@@ -749,107 +953,6 @@ server <- function(input, output, session){
   
   # Define a reactive value to track the current maps
   current_maps <- reactiveVal()
-  
-  observeEvent(input$submit, {
-    tryCatch({
-      print("Submit button clicked")
-      overlayGroup <- input$overlayGroup
-      
-      if(as.character(overlayGroup) == 'avg_monthly_cases'){
-        cv_pal <- cv_pal_c_avg_daily
-      } else {
-        overlayGroup <- 'avg_monthly_cases'
-        cv_pal <- cv_pal_c_avg_daily
-      }
-      
-      
-      # Get the selected date range
-      start_date <- as.Date(as.yearmon(input$month_range[1]), frac = 0)
-      end_date <- as.Date(as.yearmon(input$month_range[2]), frac = 1)
-      
-      # Get a sequence of months within the selected range
-      months <- seq(from = start_date, to = end_date, by = "month")
-      print(months)
-      
-      # Remove existing maps
-      if (!is.null(current_maps())) {
-        for (map_id in current_maps()) {
-          removeUI(selector = paste0("#", map_id))
-        }
-      }
-      
-      # Create a container to hold the new map IDs
-      new_map_ids <- character(length(months))
-      
-      n_columns <- 3 # Number of maps in a row
-      
-      # Loop over the months and generate a map for each
-      for(i in seq_along(months)) {
-        month_start <- months[i]
-        month_end <- ifelse(i < length(months), months[i + 1] - 1, end_date)
-        
-        # Filter your data for the current month (modify this to fit your data)
-        month_data <- full_merged_data[full_merged_data$date >= month_start & full_merged_data$date <= month_end,]
-        
-        print(head(month_data))
-        
-        # Define a unique map ID for this month
-        map_id <- paste0("map", i)
-        new_map_ids[i] <- map_id
-        
-        # Determine the row and column for the current map
-        row_idx <- (i - 1) %/% n_columns
-        col_idx <- (i - 1) %% n_columns
-        
-        # Insert a new leaflet map for the current month
-        insertUI(
-          selector = "#map_container",
-          ui = fluidRow(
-            id = map_id,
-            title = format(month_start, "%B %Y"),
-            leafletOutput(outputId = map_id, width = "100%", height = "400px")
-          )
-        )
-        
-        # Render the leaflet map for the current month
-        output[[map_id]] <- renderLeaflet({
-          # Create the leaflet map using the data for the current month (modify this to fit your visualization)
-          leaflet(options = leafletOptions(zoomControl = FALSE,
-                                           minZoom = 6, maxZoom = 6.1, dragging = FALSE)) %>%
-            # addTiles() %>%
-            setView(lng = 127.5, lat = 36.2, zoom = 6) %>%
-            addPolygons(
-              data = month_data,
-              fillColor = ~cv_pal(get(overlayGroup)),
-              color = "black",
-              weight = 1,
-              fillOpacity = 0.7,
-              label = ~paste0(
-                "<strong>", name,'</strong><br>avg_monthly_cases: ', avg_monthly_cases) %>%
-                lapply(htmltools::HTML),
-              labelOptions = labelOptions(noHide = FALSE, direction = "auto", style = list("font-weight" = "normal", "text-align" = "center"), textsize = "15px"),
-              highlightOptions = highlightOptions(
-                weight = 3,  # Increase the stroke weight of the highlighted region
-                fillOpacity = 1,  # Increase the fill opacity of the highlighted region
-                fillColor = "#FFCC99",  # Set the fill color of the highlighted region
-                color = "#FF6600"  # Set the stroke color of the highlighted region
-              )
-            ) %>%
-            setMaxBounds(lng1 = 127.5 + 5,
-                         lat1 = 36.2 + 3,
-                         lng2 = 127.5 - 5,
-                         lat2 = 36.2 - 3)
-        })
-      }
-      # Update the reactive value with the new map IDs
-      current_maps(new_map_ids)
-      
-    }, error = function(e) {
-      print(e)
-    })
-  })
-  
-  
   
   ######## region tab ##########
   
@@ -888,6 +991,8 @@ server <- function(input, output, session){
           geom_area(alpha = 0.7) +
           geom_line(size = 0.5, col = "tomato") 
       }else if(p_type == "line"){
+        # plot_raw_m <- ggplot(filtered_data_m, aes(x = date, y = y, fill = name)) +
+        #   geom_line(size = 0.5, alpha = 0.7, col = "tomato")
         plot_raw_m <- ggplot(filtered_data_m, aes(x = date, y = y, fill = name, col = name)) +
           geom_line(size = 0.5)
       }else if(p_type == "bar"){
@@ -951,7 +1056,8 @@ server <- function(input, output, session){
             legend.position = "bottom",
             legend.text = element_text(size = 12),
             legend.background = element_rect(fill = "white", color = "gray"))
-
+    
+    
     plotly_obj <- ggplotly(plot_raw_m, height = 450) %>% 
       layout(
         xaxis = list(
@@ -966,10 +1072,70 @@ server <- function(input, output, session){
       )
     
     plotly_obj
- 
+    
+    # plot_raw_m
+    
   })
   
   ######## simulation tab ##########
+  
+  observeEvent(input$show_map, {
+    showModal(modalDialog(
+      title = "Details", 
+      
+      tags$p("Proportional data:", style="font-weight: bold;font-size: 16px;"), 
+      tags$p("e.g. daily_cases (proportion) & daily_deaths (proportion).", style="font-size: 14px;"),
+      tags$p("daily_cases (proportion) = daily cases by region / total daily cases", style="font-size: 14px;"),
+      tags$br(),
+      
+      tags$p("Divide by total population data:", style="font-weight: bold;font-size: 16px;"), 
+      tags$p("e.g. daily_cases (per 100K) & total beds (per 1K).", style="font-size: 14px;"),
+      tags$p("daily_cases (per 100K) = daily cases by region / total daily cases", style="font-size: 14px;"),
+      tags$br(),
+      
+      tags$p("High risk zone for COVID-19 data:", style="font-weight: bold;font-size: 16px;"), 
+      tags$p("higher value means high risk.", style="font-size: 14px;"),
+      tags$p("high-risk zones are represented by diagonal stripes on the map.", style="font-size: 14px;"),
+      tags$br(),
+      
+      tags$p("High risk zone for Socio-demographic data:", style="font-weight: bold;font-size: 16px;"), 
+      tags$p("user can select high risk group (e.g. higher beds means low risk).", style="font-size: 14px;"),
+      tags$p("high-risk zones are represented by vertical stripes on the map.", style="font-size: 14px;"),
+      tags$br()
+    ))
+  })
+  
+  observeEvent(input$show_simulation, {
+    showModal(modalDialog(
+      title = "User Manual: Simulation Tab", 
+      tags$p("Aggregation Factor:", style="font-weight: bold;font-size: 16px;"), 
+      tags$p("Aggregation factor reduces the resolution of the result. Higher aggregation factor value means lower resolution", style="font-size: 14px;"),
+      tags$br(),
+      
+      tags$p("Epidemic Model:", style="font-weight: bold;font-size: 16px;"), 
+      tags$p("SEIRD = Susceptible, Exposed, Infected, Recovered, Dead.", style="font-size: 14px;"),
+      tags$p("SVEIRD = Susceptible, Vaccinated, Exposed, Infected, Recovered, Dead.", style="font-size: 14px;"),
+      tags$br(),
+      
+      tags$p("Model Stochasticity:", style="font-weight: bold;font-size: 16px;"), 
+      tags$p("The deterministic model relies on fixed, precise inputs without accounting for randomness, while stochastic model incorporate randomness and uncertainty in the prediction.", style="font-size: 14px;"),
+      tags$br(),
+      
+      tags$p("Model Parameters:", style="font-weight: bold;font-size: 16px;"), 
+      tags$p("\u03B1 = Vaccination Rate", style="font-size: 14px;"),  # Alpha
+      tags$p("\u03B2 = Daily Exposure Rate", style="font-size: 14px;"),  # Beta
+      tags$p("\u03B3 = Daily fraction that move out of the exposed compartment to the Infected compartment", style="font-size: 14px;"),  # Gamma
+      tags$p("\u03C3 = Daily fraction that move out of the Infected compartment to the recovered compartment", style="font-size: 14px;"),  # Sigma
+      tags$p("\u03B4 = Daily fraction that move out of the Infected compartment to the dead compartment", style="font-size: 14px;"),  # Delta
+      tags$p("\u03BB = Distance parameter", style="font-size: 14px;"),  # Lambda
+      tags$br(),
+      
+      tags$p("Seed data:", style="font-weight: bold;font-size: 16px;"), 
+      tags$p("User can choose between using the default seed data, or uploading the seed data before running the simulation.", style="font-size: 14px;"),
+      tags$br(),
+      
+    ))
+  })
   
   iv <- InputValidator$new()
   
@@ -1000,7 +1166,7 @@ server <- function(input, output, session){
   iv$enable()
   
   values <- reactiveValues()
-  values$allow_simulation_run <- TRUE
+  #values$allow_simulation_run <- TRUE
   values$df <- data.frame(Variable = character(), Value = character()) 
   output$table <- renderTable(values$df)
   
@@ -1071,27 +1237,20 @@ server <- function(input, output, session){
     shinyjs::reset("dashboard")
     
     shinyjs::disable(id = "go")
-    values$allow_simulation_run <- FALSE
-  })
-  
-  observeEvent(input$seedData, {
-    values$allow_simulation_run <- TRUE
+    
+    #values$allow_simulation_run <- FALSE
   })
   
   observe({
     mandatoryFilled <-
       vapply(fieldsMandatory,
              function(x) {
-               !is.null(input[[x]]) && input[[x]] != ""
+               !is.null(input[[x]]) && (length(which(input[[x]] == ""))==0)
              },
              logical(1))
     
     mandatoryFilled <- all(mandatoryFilled)
     
-    # enable/disable the submit button
-    if (isolate(values$allow_simulation_run) == TRUE){
-      shinyjs::toggleState(id = "go", condition = mandatoryFilled)
-    }
   })
   
   
@@ -1182,7 +1341,7 @@ server <- function(input, output, session){
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
       
       numericInput(inputId = "alpha",
-                   label = "Daily Vaccination Rate (\\( \\alpha\\)):",
+                   label = HTML("Vaccination rate (&alpha;)"), # Using HTML entity for alpha
                    value = alphaValue, min = 0, max = 1, step = 0.00001)
     }
   })
@@ -1195,7 +1354,7 @@ server <- function(input, output, session){
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
       
       numericInput(inputId = "beta",
-                   label = "Daily Exposure Rate (\\( \\beta\\))", 
+                   label = HTML("Daily Exposure rate (&beta;)"), 
                    value = betaValue, min = 0, max = 1, step = 0.00001)
     }
   })
@@ -1207,7 +1366,7 @@ server <- function(input, output, session){
     
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
       numericInput(inputId = "gamma",
-                   label = "Daily fraction that move out of the exposed compartment to the Infected compartment  (\\( \\gamma\\))", 
+                   label = HTML("Exposed -> Infected (&gamma;)"), 
                    value = gammaValue, min = 0, max = 1, step = 0.00001)
     }
   })
@@ -1220,7 +1379,7 @@ server <- function(input, output, session){
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
       
       numericInput(inputId = "sigma",
-                   label = "Daily fraction that move out of the Infected compartment to the recovered compartment (\\( \\sigma \\))", 
+                   label = HTML("Infected -> Recovered (&sigma;)"), 
                    value = sigmaValue, min = 0, max = 1, step = 0.00001)
     }
   })
@@ -1233,7 +1392,7 @@ server <- function(input, output, session){
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
       
       numericInput(inputId = "delta",
-                   "Daily fraction that move out of the Infected compartment to the dead compartment (\\(\\delta\\)):",
+                   HTML("Infected -> Dead (&delta;)"),
                    value = deltaValue, min = 0, max = 1, step = 0.00001)
     }
   })
@@ -1246,7 +1405,7 @@ server <- function(input, output, session){
     if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
       
       numericInput(inputId = "lambda",
-                   "Distance parameter (\\( \\lambda\\), in km):",
+                   HTML("Distance parameter (&lambda; in km)"),
                    value = lambdaValue,min = 1, max = 50, step = 1)
     }
   })
@@ -1261,26 +1420,59 @@ server <- function(input, output, session){
     }
   )
   
-  output$seedUpload <- renderUI({
-    validate(need(!is.null(input$selectedCountry), "")) # catches UI warning
-    
-    if (!is.null(input$selectedCountry) && input$selectedCountry != ""){
-      # if (input$dataSelect == "Upload seed data") {
-      fileInput(
-        inputId = "seedData",
-        labelMandatory("Upload initial seed data (.csv or .xls or .xlsx)"),
-        accept = c(
-          "text/csv",
-          "text/comma-separated-values,text/plain",
-          ".csv",
-          ".xls",
-          ".xlsx"
-        )
-      )
-      # } else {
-      #   NULL
-      # }
-    }})
+  output$downloadManual <- downloadHandler(
+    filename = function() {
+      "user_manual.pdf"  # The name of the file that will be downloaded
+    },
+    content = function(file) {
+      file.copy("www/user_manual.pdf", file)  # Copy the file to the download location
+    }
+  )
+
+  
+  output$downloadOutputSummary <- downloadHandler(
+    filename = function() {
+      "KOR_summary.xlsx"  # The name of the file that will be downloaded
+    },
+    content = function(file) {
+      file.copy("www/MP4/KOR_summary.xlsx", file)  # Copy the file to the download location
+    }
+  )
+
+  
+  # Dynamically render the file input UI based on dataSelect
+  output$fileInputUI <- renderUI({
+    if(input$dataSelect == "upload") {
+      fileInput("seedData", "Choose CSV File",
+                multiple = FALSE,
+                accept = c("text/csv", "text/comma-separated-values,text/plain", ".csv"))
+    }
+  })
+  
+  # Observe changes in dataSelect and seedData to manage go button state
+  observe({
+    # Enable or disable the go button based on dataSelect and whether a file has been uploaded
+    if(input$dataSelect == "default" || (input$dataSelect == "upload" && !is.null(input$seedData))) {
+      shinyjs::enable("go")
+    } else {
+      shinyjs::disable("go")
+    }
+  })
+  
+  
+  output$seedUpload <- eventReactive(input$go, {
+    if(input$dataSelect == "default") {
+      read.csv("seeddata/KOR_initialSeedData2022-07-07.csv")
+    } else if(input$dataSelect == "upload" && !is.null(input$seedData)) {
+      read.csv(input$seedData$datapath)
+    } else {
+      data.frame()  # Returns an empty data frame as a fallback
+    }
+  })
+  
+  useDefaultData <- reactive({
+    input$dataSelect == "default" || (input$dataSelect == "upload" && is.null(input$seedData))
+  })
 
   
   output$startDateInput <- renderUI({
@@ -1311,9 +1503,12 @@ server <- function(input, output, session){
       id = "video", 
       type = "video/mp4",
       src = "MP4/Infected_MP4.mp4",  # TODO: dynamically change which mp4 is printed
-      controls = "controls"
+      controls = NA
+      # controls = "controls"
     )
   })
+  
+  
   
   lineThickness <- 1.5
   
@@ -1334,28 +1529,40 @@ server <- function(input, output, session){
   observeEvent(input$go, {
     
     isCropped <- FALSE
-
+    
     print(paste0(c("isCropped", isCropped)))
     
     source("R/rasterStack.R")
     rs <- createRasterStack(input$selectedCountry, input$agg, isCropped)
     
     # ============= TAB TO SHOW SEED DATA IN TABLE ===========
-    data <- reactive({               # read seed data from .csv or .xlsx
+    # Reactive expression to read the data based on the file type or use the default dataset
+    data <- reactive({
+      req(input$go)  # Ensure this reacts to the 'go' button click
+      
+      # Load default data if 'Use default seed data' is selected
+      if(input$dataSelect == "default") {
+        return(read.csv("seeddata/KOR_initialSeedData2022-07-07.csv"))
+      }
+      
+      # If the 'Upload your own seed data' option is selected and a file is uploaded
       req(input$seedData)
       ext <- tools::file_ext(input$seedData$datapath)
-      seedData <- input$seedData
       if(ext == 'xlsx'){
-        readxl::read_excel(input$seedData$datapath)
-      } else {
-        read.csv(input$seedData$datapath)
+        return(readxl::read_excel(input$seedData$datapath))
+      } else {  # Assume .csv for all other cases
+        return(read.csv(input$seedData$datapath))
       }
     })
     
     output$tableSeed <- renderDataTable({ # print initial seed data to UI
-      req(input$seedData)
-      if(is.null(data())){return ()}
-      data()
+      if(input$dataSelect == "default") {
+        data()
+      }else{
+        req(input$seedData)
+        if(is.null(data())){return ()}
+        data()
+      }
     })
     
     output$outputSummary <- renderDataTable({ # print output summary to UI
@@ -1400,9 +1607,13 @@ server <- function(input, output, session){
     row6  <- data.frame(Variable = "Model Parameters", Value = paste("Alpha:", alpha,"Beta:", beta,"Gamma:", gamma, "Sigma:", sigma,"Delta:", delta))
     row7  <- data.frame(Variable = "Average Distance Travelled/Day (in km)", Value = input$lambda)
     row8  <- data.frame(Variable = "Radius (1 = Moore neighbourhood)", Value = radius)
-    row9  <- data.frame(Variable = "Uploaded Seed Data", Value = input$seedData$name)
+    print(input$seedData$name)
+    if(input$dataSelect == "default"){
+      row9  <- data.frame(Variable = "Uploaded Seed Data", Value = "seeddata_KOR_initialSeedData_default.csv")
+    }else{
+      row9  <- data.frame(Variable = "Uploaded Seed Data", Value = input$seedData$name)
+    }
     row10 <- data.frame(Variable = "Number of iterations (days)", Value = input$timestep)
-    
     values$df <- rbind(row1, row2, row3, row4, row5, row6, row7, row8, row9, row10)
     
   })
@@ -1496,5 +1707,7 @@ server <- function(input, output, session){
   })
   
 }
+
+
 
 shinyApp(ui,server)
